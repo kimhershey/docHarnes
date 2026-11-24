@@ -1253,6 +1253,7 @@ fn a_summary_is_one_result() {
 }
 
 mod deterministic_side;
+mod v105;
 
 // ---------------------------------------------------------------------------
 // Executor
@@ -2040,6 +2041,7 @@ mod exec_tests {
 
     /// 0.8.0 audit fixes in the executor and its previews: `tests/exec_tests/audit_fixes.rs`.
     mod audit_fixes;
+    mod v105;
 }
 
 #[test]
@@ -2124,23 +2126,16 @@ fn a_summary_about_a_subject_through_the_model_path() {
         r.plan
     );
     assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
-    // A name alone is content, even when a project is called so (user decision 2026-11-20): every
-    // document, the grouping nobody asked for goes without a word, and the card names the other reading.
-    let r = planned(
-        "AAA에 대해서 요약해줘",
-        json!({}),
-        json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }),
+    // A name that is also a project's (1.0.5, user decision C): the sentence reads three ways, and the
+    // assistant asks which — the readings are ready-made plans, covered in `tests/v105.rs`.
+    let chat = StageChat::new();
+    chat.push(
+        "plan",
+        json!({ "summary": "요약합니다", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "topic": "AAA", "group_by": "project" }], "requires_confirmation": false, "confidence": 0.9 }),
     );
-    assert!(
-        matches!(
-            r.plan.operations.as_slice(),
-            [Op::Summarize { group_by: None, topic: Some(t), .. }] if t == "AAA"
-        ),
-        "{:?}",
-        r.plan
-    );
-    assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
-    assert_eq!(codes(&r), vec!["topic_names_project"]);
+    let r = plan(Some(&deps(&chat)), "AAA에 대해서 요약해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(r.plan.is_clarification(), "{:?}", r.plan);
+    assert_eq!(r.choices.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), vec!["project", "topic", "project_topic"]);
     // The project slot alone ("… 프로젝트"): one summary of its documents — no subject, no split.
     for text in ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘"] {
         let r = planned(text, json!({}), json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }));
@@ -2174,20 +2169,23 @@ fn a_summary_about_a_subject_through_the_model_path() {
         assert_eq!(r.plan.scope.filter.doc_type, None, "{text}: the type is a word of the subject");
         assert!(r.plan.scope.filter.with_reference, "{text}");
     }
-    // A kind of document is no subject: the summary of the estimates, as the model's plan was before
-    // it had a topic to write.
-    let r = planned(
-        "견적서에 대해 요약해줘",
-        json!({ "filter": { "doc_type": "quotation" } }),
-        json!({ "op": "summarize", "topic": "견적서" }),
+    // A kind of document is no subject to the guards: the summary of the estimates, as the model's
+    // plan was before it had a topic to write. Since 1.0.5 that reading is the first of two the
+    // assistant offers — the other is what the documents say about the word.
+    let chat = StageChat::new();
+    chat.push(
+        "plan",
+        json!({ "summary": "요약합니다", "unmet": "", "intent": "summarize", "scope": { "filter": { "doc_type": "quotation" } }, "operations": [{ "op": "summarize", "topic": "견적서" }], "requires_confirmation": false, "confidence": 0.9 }),
     );
+    let r = plan(Some(&deps(&chat)), "견적서에 대해 요약해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(r.plan.is_clarification(), "{:?}", r.plan);
+    assert_eq!(r.choices.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), vec!["type", "topic"]);
+    let of_type = &r.choices[0].plan;
     assert!(
-        matches!(r.plan.operations.as_slice(), [Op::Summarize { group_by: None, topic: None, .. }]),
-        "{:?}",
-        r.plan
+        matches!(of_type.operations.as_slice(), [Op::Summarize { group_by: None, topic: None, .. }]),
+        "{of_type:?}"
     );
-    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("quotation"));
-    assert!(codes(&r).is_empty(), "{:?}", r.issues);
+    assert_eq!(of_type.scope.filter.doc_type.as_deref(), Some("quotation"));
     // The type the subject's words name is no place to look; the length the sentence asks is kept.
     let r = planned(
         "계약서에서 영수증 처리 기준에 대해 자세히 요약해줘",
@@ -2621,7 +2619,9 @@ fn a_question_needs_no_document_type() {
         r.issues.iter().any(|i| i.code == "doc_type_ignored" && !i.blocking && i.message.contains("overview")),
         "{r:?}"
     );
-    // … and so is a type the sentence does not name; one it names stays, and a summary keeps the model's.
+    // … and so is a type the sentence does not name. Since 1.0.5 (user decision B) one it names goes
+    // as well — quietly: a question is looked up in every document of the scope, whatever each was
+    // classified as — and a summary keeps the model's.
     let (r, _) = run(&c, text, reply(answer.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9));
     assert_eq!(r.plan.scope.filter.doc_type, None, "{r:?}");
     assert!(r.issues.iter().any(|i| i.code == "doc_type_ignored" && i.message.contains("계약서")), "{r:?}");
@@ -2630,7 +2630,8 @@ fn a_question_needs_no_document_type() {
         "AAA 프로젝트 계약서에서 위약금이 얼마인지 알려줘",
         reply(answer.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9),
     );
-    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{r:?}");
+    assert_eq!(r.plan.scope.filter.doc_type, None, "{r:?}");
+    assert!(!r.issues.iter().any(|i| i.code == "doc_type_ignored"), "{r:?}");
     assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{r:?}");
     let summary = json!([{ "op": "summarize" }]);
     let (r, _) =

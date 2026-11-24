@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PageLayout } from "@/lib/types";
 
-import { displayUnits, fitFontSize, selectionText, wordAt } from "./textLayer";
+import { displayUnits, fitFontSize, matchWords, passageNeedles, selectionText, wordAt } from "./textLayer";
 
 const layout: PageLayout = {
   version: 2,
@@ -30,6 +30,19 @@ describe("textLayer helpers", () => {
     expect(displayUnits("한글")).toBe(2);
     expect(displayUnits("ab")).toBeCloseTo(1.1);
     expect(displayUnits("")).toBe(0.55);
+  });
+
+  it("marks the lines of a cited passage that stand on the open page (1.0.5)", () => {
+    // A passage over two pages: the heading and two lines on the first, three on the second.
+    const passage = { heading_path: "제3조(납품)", text: "제3조(납품)\n을은 계약일로부터 30일 이내에 납품한다.\n납품 장소는 갑이 지정한다.\n지체상금은 1일당 0.1%로 한다.\n지체상금의 한도는 10%이다.\n검수는 7일 이내에 마친다.\n끝." };
+    const second = "지체상금은 1일당 0.1%로 한다.\n지체상금의 한도는 10%이다.\n검수는 7일 이내에 마친다.";
+    expect(passageNeedles(passage, (line) => second.includes(line))).toEqual(["지체상금은 1일당 0.1%로 한다.", "지체상금의 한도는 10%이다.", "검수는 7일 이내에 마친다."]);
+    // The page the passage begins on: its opening lines, as before — and so while nothing is known of the page.
+    const first = "을은 계약일로부터 30일 이내에 납품한다.\n납품 장소는 갑이 지정한다.";
+    expect(passageNeedles(passage, (line) => first.includes(line))).toEqual(["을은 계약일로부터 30일 이내에 납품한다.", "납품 장소는 갑이 지정한다."]);
+    expect(passageNeedles(passage, () => false)).toEqual(["을은 계약일로부터 30일 이내에 납품한다.", "납품 장소는 갑이 지정한다.", "지체상금은 1일당 0.1%로 한다."]);
+    // On the page image the lines are looked for in the word layout.
+    expect(passageNeedles({ heading_path: null, text: "다른 쪽의 줄입니다\n번 호 품목" }, (line) => matchWords(layout, [line]).size > 0)).toEqual(["번 호 품목"]);
   });
 
   it("fits a corrected word into its box by height, then by width", () => {

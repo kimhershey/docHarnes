@@ -375,11 +375,28 @@ fn search_groups(deps: &ExecDeps<'_>, hits: &[crate::knowledge::SearchHit], grou
 /// scope holds none; `no_reference_in_project` — the project has no reference material of its own,
 /// and the common reference material is not what a command inside a project works on;
 /// `no_work_in_scope`), or nothing matches at all (`no_documents`).
+///
+/// 1.0.5: the kind is named as the reason only when it is the only condition besides the project.
+/// A scope that also asks for a type, a tag, a status, a vendor, a file name, a period, a folder or
+/// certain documents may be empty because of any of them: "이 범위에는 참고 자료가 없습니다" was said
+/// of a project that had reference material, for a tag no document carried.
 pub(super) fn no_documents(plan: &Plan) -> CoreError {
     let f = &plan.scope.filter;
     let in_project = f.project_id.as_deref().is_some_and(|p| !p.trim().is_empty());
+    let other_conditions = f.doc_type.is_some()
+        || !f.tags.is_empty()
+        || f.status.is_some()
+        || f.review_status.is_some()
+        || f.min_confidence.is_some()
+        || f.vendor.is_some()
+        || f.keyword.is_some()
+        || f.date_from.is_some()
+        || f.date_to.is_some()
+        || plan.scope.folder.is_some()
+        || !plan.scope.doc_ids.is_empty();
     CoreError::Invalid(
         match f.role {
+            _ if other_conditions => "no_documents",
             Some(crate::planner::RoleParam::Knowledge) if in_project => "no_reference_in_project",
             Some(crate::planner::RoleParam::Knowledge) => "no_reference_in_scope",
             Some(crate::planner::RoleParam::Work) => "no_work_in_scope",

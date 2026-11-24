@@ -573,7 +573,12 @@
       "folder": "Folder",
       "documents": "Documents",
       "doc_ids": "{{count}} selected",
-      "any": "(all)"
+      "any": "(all)",
+      "type_match": {
+        "classified": "Only documents classified as this type",
+        "named": "Only documents with the type's name in the title or file name",
+        "both": "Documents classified as this type and documents with the type's name in the title or file name"
+      }
     },
     "editor": {
       "step": "{{index}}. {{op}}",
@@ -752,7 +757,9 @@
       "reply_placeholder": "Answer the question or ask back",
       "cancel": "Cancel",
       "answered": "Replied",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "choices": "Readings to choose from",
+      "choices_hint": "Pick the reading you meant and it goes ahead. You can also answer in your own words."
     },
     "ui": {
       "set_setting": "Setting changed: {{key}} = {{value}}",
@@ -1306,7 +1313,7 @@
       "topic_empty": "Say what the summary is about.",
       "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
       "no_files": "Choose files or type paths.",
-      "no_documents": "No documents selected.",
+      "no_documents": "No documents to work on. Check that the selection or the scope you named (project, type, tags, period …) matches a document.",
       "no_reference_in_scope": "There is no reference material in this scope. Ask again without naming reference material to cover every document in the scope.",
       "no_reference_in_project": "This project has no reference material. Ask again without naming reference material to cover every document of the project; to cover the common reference material, switch the assistant's scope to All and ask again.",
       "no_work_in_scope": "There are no work documents in this scope. Ask again without naming work documents to cover every document in the scope.",
@@ -2011,6 +2018,7 @@
     "open_source": "Open source",
     "citation_page": "p.{{page}}",
     "citation_pages": "p.{{from}}-{{to}}",
+    "citation_page_in": "p.{{page}} (passage on pp. {{from}}–{{to}})",
     "copy": "Copy",
     "copied": "Copied.",
     "meta": "{{model}} · {{ms}}ms",

@@ -73,6 +73,7 @@ import {
   type DocumentsChanged,
   type ExecuteArgs,
   type ExecuteResponse,
+  type PlanChoice,
   type ExportFormat,
   type ExportPreview,
   type ExportRequest,
@@ -1844,6 +1845,16 @@ function isTypeName(subject: string, ctx: PlanContext): boolean {
   return key !== "" && ctx.doc_types.some((d) => [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)].some((label) => compact(label) === key));
 }
 
+/** `guard::type_named`: the document type the subject is nothing but the name of. */
+function typeNamed(subject: string, ctx: PlanContext): DocTypeSummary | null {
+  let key = compact(subject);
+  if (key.startsWith("모든")) key = key.slice(2);
+  const suffix = ["들", "문서", "내용", "전체", "전부"].find((w) => key.endsWith(w));
+  if (suffix) key = key.slice(0, -suffix.length);
+  if (key === "") return null;
+  return ctx.doc_types.find((d) => [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)].some((label) => compact(label) === key)) ?? null;
+}
+
 /** `guard::project_of`: the project the subject is the name of ("AAA", "AAA 프로젝트", "the AAA project"). */
 function projectOfSubject(subject: string, ctx: PlanContext): ProjectSummary | null {
   const bare = (s: string) => {
@@ -1869,11 +1880,25 @@ function asksSummary(rest: string): boolean {
   return SUMMARY_ASKS.some((a) => said.includes(a)) || said.endsWith("요약") || said.endsWith("요약을") || rest.toLowerCase().includes("summar");
 }
 
-/** `guard::asks_explanation`: the words outside the subject ask for it to be explained ("설명해줘"; not a "설명서"). */
+/**
+ * `guard::asks_explanation`: the words outside the subject ask for it to be explained ("설명해줘"; not a "설명서") — or to
+ * be told (1.0.5, user decision A: "알려줘" asks for an answer like "설명해줘" does): "알려줘", "tell me". Not when what is
+ * to be told is a list, a place or a count ("… 문서 목록 알려줘", "… 몇 건인지 알려줘").
+ */
 const EXPLAIN_ASKS = ["설명해", "설명하", "설명좀", "설명부탁", "설명을해", "설명을부탁", "설명바"];
+const FIND_WORDS = ["찾아", "찾기", "검색", "어디", "목록", "리스트"];
+const FIND_WORDS_EN = /\b(find|search\w*|where|list|locate)\b/i;
+const COUNT_WORDS = ["몇", "얼마", "합계", "총액", "건수", "개수", "howmany", "howmuch"];
 function asksExplanation(rest: string): boolean {
   const said = compact(rest);
-  return EXPLAIN_ASKS.some((a) => said.includes(a)) || said.endsWith("설명") || said.endsWith("설명을") || rest.toLowerCase().includes("explain");
+  const lower = rest.toLowerCase();
+  const tells =
+    (said.includes("알려") || lower.includes("tell me")) &&
+    !FIND_WORDS.some((w) => said.includes(w)) &&
+    !FIND_WORDS_EN.test(lower) &&
+    !COUNT_WORDS.some((w) => said.includes(w)) &&
+    !/\b(total|count)\b/i.test(lower);
+  return EXPLAIN_ASKS.some((a) => said.includes(a)) || said.endsWith("설명") || said.endsWith("설명을") || lower.includes("explain") || tells;
 }
 
 /** `guard::project_named`: the one project the words name. */
@@ -2002,7 +2027,12 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const groupBy = summarize ? summaryGroupOf(t) : null;
   if (scopeIsEmpty(scope) && !has(t, ALL_WORDS) && groupBy === null) {
     const sel = selectionIds(ctx);
-    if (sel.length > 0 && (has(t, ["이", "선택", "this", "selected"]) || summarize || ocr)) scope.doc_ids = sel;
+    // 1.0.5 (`rules::process`): a project a summary names by its name alone ("AAA 참고자료 요약해줘") is where to look,
+    // before the open document stands in for it.
+    const summaryOnly = summarize && !(classify || ocr || extract || validate || generic);
+    const namedProject = summaryOnly && !pointsAt(t.raw, t.ko) ? projectNamedIn(userWords(t.raw), ctx) : null;
+    if (namedProject) scope.filter = { ...(scope.filter ?? {}), project_id: namedProject.id };
+    else if (sel.length > 0 && (has(t, ["이", "선택", "this", "selected"]) || summarize || ocr)) scope.doc_ids = sel;
     else if (ctx.current_folder && has(t, ["여기", "here"])) scope.folder = ctx.current_folder;
     else if (sel.length > 0) scope.doc_ids = sel;
     else return clarify(tr(t.ko, "어떤 문서를 처리할까요? 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요.", "Which documents? Select them in the library or name a folder / type / date range."), 0.5);
@@ -2056,8 +2086,19 @@ function ruleSearch(t: Text, ctx: PlanContext): Plan | null {
     .trim();
   if (!q) return single({ op: "open", target: "screen", ref: "search" }, 0.8, tr(t.ko, "검색 화면을 엽니다", "Open the search screen"));
   const d = dateOf(t, ctx);
+  // 1.0.5 (user decision B, `rules::search`): the type's name is not what to look for ("'위약금' 들어간 계약서" → 위약금)
+  // and no scope condition either — a search looks in every document, whatever each was classified as. A query of
+  // nothing but the name keeps it ("계약서 찾아줘").
   const dt = docTypeOf(t, ctx);
-  const scope = scopeOf(t, ctx, dt, d);
+  if (dt) {
+    for (const label of [dt.label_ko, dt.label_en, ...docTypeAliases(dt.slug)]) {
+      if (Array.from(label).length < 2) continue;
+      const key = compact(label);
+      const stripped = q.split(/\s+/).filter((w) => compact(w) !== key && !compact(w).endsWith(key)).join(" ");
+      if (stripped.trim()) q = stripped;
+    }
+  }
+  const scope = scopeOf(t, ctx, null, d);
   // "프로젝트별로 … 검색" (0.8.1): the hits per group; the words of the split are not the query.
   const group = summaryGroupOf(t);
   if (group) {
@@ -2079,29 +2120,6 @@ function ruleOpenDocument(t: Text): Plan | null {
 
 const QUESTION_WORDS = ["알려줘", "알려주", "알려", "뭐야", "무엇", "어떻게", "어디", "언제", "누구", "왜", "인가요", "인지", "나요", "까요", "가요", "설명해", "explain", "what", "how", "when", "where", "why", "which", "who"];
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * The type a question names as the place to look — "지난달 회의록에서 결정된 사항은?", "견적서 중에서 …",
- * "what do the contracts say in the meeting minutes" — as opposed to the type it asks about: "견적서 내용은?" is a
- * question about estimates, not a filter on the documents typed 견적서. (The mock has no model to tell the two
- * apart; the particle after the type name stands in for it.)
- */
-function placeTypeOf(t: Text, ctx: PlanContext): DocTypeSummary | null {
-  let best: { d: DocTypeSummary; len: number } | null = null;
-  for (const d of ctx.doc_types) {
-    for (const label of [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)]) {
-      const len = Array.from(compact(label)).length;
-      if (len < 2 || (best !== null && len <= best.len)) continue;
-      const name = label.trim().toLowerCase().split(/\s+/).map(escapeRegExp).join("\\s*");
-      const korean = new RegExp(`${name}(?:\\s*문서)?(?:들)?\\s*(?:에서|중에서|중에|안에서|내에서)(?=[\\s,.?？]|$)`, "u");
-      const english = new RegExp(`\\b(?:in|from|within)\\s+(?:the\\s+|all\\s+|my\\s+|our\\s+)?${name}s?\\b`, "u");
-      if (korean.test(t.lower) || english.test(t.lower)) best = { d, len };
-    }
-  }
-  return best?.d ?? null;
-}
-
 function ruleAnswer(t: Text, ctx: PlanContext): Plan | null {
   const question = /[?？]$/.test(t.raw.trim()) || has(t, QUESTION_WORDS);
   if (!question) return null;
@@ -2110,8 +2128,8 @@ function ruleAnswer(t: Text, ctx: PlanContext): Plan | null {
   // validator, as for every plan. The UI asks within the documents that scope resolves to.
   const scope = emptyScope();
   if (has(t, SELECTION_WORDS)) scope.doc_ids = selectionIds(ctx);
-  const place = placeTypeOf(t, ctx);
-  if (place) scope.filter = { ...(scope.filter ?? {}), doc_type: place.slug };
+  // (1.0.5, user decision B: a question never takes a document type as a scope condition — "회의록에서 결정된
+  // 사항은?" is looked up in every document of the scope, whatever each was classified as)
   if (has(t, ["프로젝트", "project"]) && !has(t, PROJECT_GROUP_WORDS)) {
     const ref = projectRefOf(t, ctx);
     if (ref) scope.filter = { ...(scope.filter ?? {}), project_id: ref };
@@ -2360,6 +2378,8 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
     const d = ctxDocType(ctx, f.doc_type);
     if (d) f.doc_type = d.slug;
     else if (ctx.doc_types.length > 0) issues.push(issue("scope.filter.doc_type", "doc_type_unknown", `unknown document type '${f.doc_type}'; known: ${knownTypes(ctx)}`));
+  } else {
+    delete f.type_match; // (how a type condition matches means nothing without one)
   }
   for (const [path, value] of [
     ["scope.filter.date_from", f.date_from],
@@ -3188,20 +3208,11 @@ function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): P
     notes.push(issue("scope.filter.project_id", "scope_filled", ko ? `문장의 '${placed.name}' 프로젝트를 대상으로 합니다` : `the project '${placed.name}' from the sentence is the scope`, false));
   }
   if (topic) {
+    // (a subject that is also the name of a project is asked about before the plan is made — `planChoices`, 1.0.5;
+    // the note that named the other reading is gone)
     const called = projectOfSubject(topic, ctx);
-    if (called && plan.scope.filter.project_id !== called.id) {
-      // The subject is also the name of a project: say which reading this is, and the other one.
-      notes.push(
-        issue(
-          "operations[0].topic",
-          "topic_names_project",
-          ko
-            ? `'${called.name}'은(는) 프로젝트 이름이기도 합니다. 지금은 문서에서 '${called.name}'에 관한 내용을 찾습니다. 그 프로젝트의 문서 전체를 요약하려면 "${called.name} 프로젝트 요약해줘"라고 하세요.`
-            : `'${called.name}' is also the name of a project. This looks up what the documents say about '${called.name}'; for a summary of the project's documents say "summarise the ${called.name} project".`,
-          false,
-        ),
-      );
-    } else if (!plan.scope.filter.project_id && !namedDocuments && /프로젝트|project/i.test(place) && !/프로젝트\s?별|(by|per) project/i.test(place) && !/(이|현재|지금|열린)\s?프로젝트|(this|current) project/i.test(place)) {
+    const namesAnother = !!called && plan.scope.filter.project_id !== called.id;
+    if (!namesAnother && !plan.scope.filter.project_id && !namedDocuments && /프로젝트|project/i.test(place) && !/프로젝트\s?별|(by|per) project/i.test(place) && !/(이|현재|지금|열린)\s?프로젝트|(this|current) project/i.test(place)) {
       notes.push(issue("scope.filter.project_id", "project_not_found", ko ? "문장이 말한 프로젝트를 찾지 못했습니다. 프로젝트로 좁히지 않고 찾습니다." : "the project the sentence names was not found; looking without a project", false));
     }
   }
@@ -3363,6 +3374,166 @@ export function plannerModelDisabled(): boolean {
  * Plans one command: pre-router → phrase rules → (simulated) model (`llm::plan`). Never throws
  * on model trouble: without a model the result carries a clarification plan and a `no_model` issue.
  */
+// ---------------------------------------------------------------------------
+// Questions with choices (planner/choices.rs, 1.0.5 — user decision C)
+// ---------------------------------------------------------------------------
+
+/** The choices that pass the validator, each normalised as a planned plan is (`choices::checked`). */
+function checkedChoices(readings: [string, string, Plan][], ctx: PlanContext): PlanChoice[] {
+  const out: PlanChoice[] = [];
+  for (const [key, label, plan] of readings) {
+    const issues = validatePlan(plan, ctx, null);
+    if (!hasErrors(issues) && !isClarification(plan)) out.push({ key, label, plan });
+  }
+  return out;
+}
+
+/**
+ * `choices::overlap`: the question and the readings of a sentence whose subject is also the name of a project or
+ * of a document type, when it asks for that subject to be summarised, told or explained. Nothing for the reply to
+ * a question, for a plan that is a question or does something else than read, and when the sentence settles the
+ * reading itself (it says "프로젝트", or names where to look).
+ */
+export function planChoices(text: string, plan: Plan, ctx: PlanContext, ko: boolean): { question: string; choices: PlanChoice[] } | null {
+  if (isClarification(plan) || ASK_BACK.test(text)) return null;
+  const only = plan.operations.length === 1 ? plan.operations[0]! : null;
+  if (!only || !(only.op === "summarize" || (only.op === "answer" && !only.reply) || only.op === "search" || only.op === "explain")) return null;
+  const phrase = aboutPhrase(text);
+  if (!phrase) return null;
+  const a = projectInFront(phrase, ctx);
+  if (!namesASubject(a.subject)) return null;
+  const summarised = asksSummary(a.rest);
+  const told = !summarised && asksExplanation(a.rest);
+  if (!summarised && !told) return null;
+  const subject = a.subject;
+  const rest = mkText(a.rest, ko);
+  const length = has(rest, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(rest, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null;
+  const base = (): Plan => {
+    const p = structuredClone(plan);
+    p.requires_confirmation = false;
+    p.clarification_question = null;
+    delete p.unmet;
+    p.confidence = Math.max(p.confidence, MIN_CONFIDENCE);
+    p.scope.filter = p.scope.filter ?? {};
+    return p;
+  };
+  const whole = (summary: string): Plan => ({ ...base(), intent: "summarize", operations: [{ op: "summarize", length }], summary });
+  const aboutTheWord = (answer: boolean, place: string | null): Plan => {
+    if (answer) return { ...base(), intent: "answer", operations: [{ op: "answer", question: userWords(text).trim() }], summary: ko ? "문서에서 찾아 답합니다" : "Answers from the documents" };
+    const summary = place
+      ? ko ? `'${place}' 프로젝트에서 '${subject}'에 관한 내용을 찾아 요약합니다` : `Summarise what the documents of the project '${place}' say about '${subject}'`
+      : ko ? `'${subject}'에 관한 내용을 문서에서 찾아 요약합니다` : `Summarise what the documents say about '${subject}'`;
+    return { ...base(), intent: "summarize", operations: [{ op: "summarize", length, topic: subject }], summary };
+  };
+  const namesDocuments = (plan.scope.doc_ids ?? []).length > 0 || plan.scope.folder != null;
+  const where = saysWhere(a.rest, ctx);
+
+  // 1. The subject is the name of a project, and the sentence does not say which it means.
+  const project = projectOfSubject(subject, ctx);
+  if (project) {
+    const said = compact(text);
+    if (said.includes("프로젝트") || /\bprojects?\b/i.test(text) || namesDocuments || where) return null;
+    const name = project.name;
+    const ofProject = whole(ko ? `'${name}' 프로젝트의 문서를 요약합니다` : `Summarise the documents of the project '${name}'`);
+    ofProject.scope.filter!.project_id = project.id;
+    const anywhere = aboutTheWord(told, null);
+    delete anywhere.scope.filter!.project_id;
+    const inside = aboutTheWord(false, name);
+    inside.scope.filter!.project_id = project.id;
+    const everywhere = ko
+      ? told ? `모든 문서에서 '${subject}'에 관해 찾아 답하기` : `모든 문서에서 '${subject}'에 관한 내용을 찾아 요약`
+      : told ? `Answer from all documents about '${subject}'` : `Summarise what all documents say about '${subject}'`;
+    const choices = checkedChoices(
+      [
+        ["project", ko ? `'${name}' 프로젝트의 문서 전체를 요약` : `Summarise all documents of the project '${name}'`, ofProject],
+        ["topic", everywhere, anywhere],
+        ["project_topic", ko ? `'${name}' 프로젝트의 문서에서 '${subject}'에 관한 내용을 찾아 요약` : `Summarise what the documents of the project '${name}' say about '${subject}'`, inside],
+      ],
+      ctx,
+    );
+    return choices.length >= 2 ? { question: ko ? `'${name}' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?` : `There is a project called '${name}'. Which did you mean?`, choices } : null;
+  }
+
+  // 2. The subject is the name of a document type: the documents of that type, or the word.
+  const docType = typeNamed(subject, ctx);
+  if (!docType || (plan.scope.doc_ids ?? []).length > 0) return null;
+  const ofType = whole(ko ? resolveJosa(`'${docType.label_ko}' 문서을(를) 요약합니다`) : `Summarise the '${docType.label_en}' documents`);
+  ofType.scope.filter!.doc_type = docType.slug;
+  delete ofType.scope.filter!.type_match;
+  const place = ctx.projects.find((p) => p.id === plan.scope.filter?.project_id) ?? null;
+  const word = aboutTheWord(told && !where, place?.name ?? null);
+  delete word.scope.filter!.doc_type;
+  delete word.scope.filter!.type_match;
+  const answers = word.operations[0]!.op === "answer";
+  const label = ko ? docType.label_ko : docType.label_en;
+  const choices = checkedChoices(
+    [
+      ["type", ko ? `유형이 '${label}'인 문서를 요약` : `Summarise the documents of the type '${label}'`, ofType],
+      [
+        "topic",
+        ko
+          ? answers ? `문서에서 '${subject}'에 관해 찾아 답하기` : `문서에서 '${subject}'에 관한 내용을 찾아 요약`
+          : answers ? `Answer from the documents about '${subject}'` : `Summarise what the documents say about '${subject}'`,
+        word,
+      ],
+    ],
+    ctx,
+  );
+  return choices.length >= 2
+    ? { question: ko ? resolveJosa(`'${subject}'은(는) 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?`) : `'${subject}' is also the name of a document type. Which did you mean?`, choices }
+    : null;
+}
+
+/**
+ * `choices::type_overlap`: a plan whose scope names a document type, when the documents classified as that type and
+ * the ones that only carry its name are not the same — the user says which are meant (`scope.filter.type_match`).
+ * Asked only when both kinds exist.
+ */
+export function typeChoices(plan: Plan, ctx: PlanContext, ko: boolean): { question: string; choices: PlanChoice[] } | null {
+  const slug = plan.scope.filter?.doc_type?.trim();
+  if (!slug || isClarification(plan) || plan.scope.filter?.type_match || !usesScope(plan)) return null;
+  const rest = structuredClone(plan.scope);
+  const target = rest.filter?.project_id ?? null;
+  // (`exec::plan_scope`: the project of the scope is the destination of `add_to_project`, not a filter)
+  if (target && plan.operations.some((op) => op.op === "add_to_project" && (op.project == null || op.project === target))) delete rest.filter!.project_id;
+  delete rest.filter!.doc_type;
+  delete rest.filter!.type_match;
+  const docs = resolveScope(rest);
+  const names = typeNames(slug);
+  const classified = docs.filter((d) => d.doc_type === slug).length;
+  const named = docs.filter((d) => namedAs(d, names)).length;
+  const namedOnly = docs.filter((d) => d.doc_type !== slug && namedAs(d, names)).length;
+  if (classified === 0 || namedOnly === 0) return null;
+  const type = ctx.doc_types.find((d) => d.slug === slug);
+  const quoted = `'${type ? (ko ? type.label_ko : type.label_en) : slug}'`;
+  const withMatch = (how: "classified" | "named" | "both"): Plan => {
+    const p = structuredClone(plan);
+    p.scope.filter = { ...(p.scope.filter ?? {}), type_match: how };
+    return p;
+  };
+  const count = (n: number) => (ko ? `${n}건` : `${n}`);
+  const choices: PlanChoice[] = [
+    { key: "classified", label: ko ? resolveJosa(`${quoted}(으)로 분류된 문서 ${count(classified)}`) : `Documents classified as ${quoted} (${count(classified)})`, plan: withMatch("classified") },
+    { key: "named", label: ko ? `제목이나 파일 이름에 유형 이름이 들어 있는 문서 ${count(named)}` : `Documents with the type's name in the title or file name (${count(named)})`, plan: withMatch("named") },
+    { key: "both", label: ko ? `둘 다 ${count(classified + namedOnly)}` : `Both (${count(classified + namedOnly)})`, plan: withMatch("both") },
+  ];
+  const question = ko
+    ? resolveJosa(`${quoted} 문서를 어떻게 고를까요? ${quoted}(으)로 분류된 문서가 ${classified}건 있고, 그렇게 분류되지는 않았지만 제목이나 파일 이름에 유형 이름이 들어 있는 문서가 ${namedOnly}건 있습니다.`)
+    : `Which ${quoted} documents? ${classified} are classified as that type, and ${namedOnly} more only carry its name in their title or file name.`;
+  return { question, choices };
+}
+
+/** `choices::question_plan` + the result's choices: the plan becomes the question, the readings travel next to it. */
+function askWith(result: PlanResult, asked: { question: string; choices: PlanChoice[] } | null): boolean {
+  if (!asked) return false;
+  const question = clarify(asked.question, result.plan.confidence);
+  question.summary = result.plan.summary;
+  result.plan = question;
+  result.choices = asked.choices;
+  result.issues = result.issues.filter((i) => i.blocking);
+  return true;
+}
+
 export function planText(text: string, ctx: PlanContext, opts: { model?: boolean; routing?: PlanMode | null } = {}): PlanResult {
   const t = text.trim();
   const ko = ctx.language === "ko";
@@ -3421,6 +3592,7 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     if (route && accept(replyPlan(t, route, ko), "model")) {
       result.route = route;
       result.completion_tokens = 12;
+      askWith(result, planChoices(t, result.plan, ctx, ko));
       return result;
     }
     const said = mkText(userWords(t), ko);
@@ -3439,6 +3611,8 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
         question.summary = result.plan.summary;
         result.plan = question;
       }
+      // A sentence that reads two ways is asked about with its readings as choices (1.0.5).
+      askWith(result, planChoices(t, result.plan, ctx, ko));
       return result;
     }
     result.source = "model";
@@ -3457,14 +3631,20 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
   // 1. compound sentences go to the rules first so the second clause is kept
   if (isCompound(t)) {
     const p = rulesPlan(t, ctx);
-    if (p && accept(p, "rules")) return result;
+    if (p && accept(p, "rules")) {
+      askWith(result, planChoices(t, result.plan, ctx, ko));
+      return result;
+    }
   }
   const pre = prerouted(t, ctx);
   if (pre && accept(pre.plan, "prerouter")) return result;
   // 2. phrase rules
   const p = rulesPlan(t, ctx);
   if (p) {
-    if (accept(p, "rules")) return result;
+    if (accept(p, "rules")) {
+      askWith(result, planChoices(t, result.plan, ctx, ko));
+      return result;
+    }
     // A rule that produced an invalid plan still beats a model guess: ask the user with the first error.
     const issues = validatePlan(structuredClone(p), ctx, date);
     const first = issues.find((i) => i.blocking);
@@ -3498,6 +3678,23 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
 // Scope resolution (planner/scope.rs)
 // ---------------------------------------------------------------------------
 
+/**
+ * `scope::type_names`: the names a document type goes by, as comparison keys — the names of the forms registered
+ * for it, its labels and the aliases commands use. Only names of three or more characters.
+ */
+export function typeNames(slug: string): string[] {
+  const names: string[] = [...docTypeAliases(slug)];
+  for (const d of pl.docTypeList()) if (d.slug === slug) names.push(d.label_ko, d.label_en);
+  for (const sc of pl.listSchemas()) if (sc.doc_type === slug) names.push(sc.name, sc.name_en ?? "");
+  return [...new Set(names.map(compact).filter((k) => Array.from(k).length >= 3))];
+}
+
+/** `scope::named_as`: the document carries one of the type's names in its title, its original name or its file name. */
+export function namedAs(doc: MockDoc, names: string[]): boolean {
+  const own = [doc.title ?? "", doc.original_name, basename(doc.rel_path)].map(compact);
+  return names.some((n) => own.some((o) => o.includes(n)));
+}
+
 /** Date a document is filed under: its document date, else the import date. Returns `[YYYY-MM-DD, basis]`. */
 export function basisDate(doc: MockDoc): [string | null, "doc_date" | "imported_at"] {
   const d = (doc.doc_date ?? "").trim();
@@ -3517,7 +3714,14 @@ export function resolveScope(scope: Scope | undefined): MockDoc[] {
       return folder === "" ? dir === "" : dir === folder || dir.startsWith(`${folder}/`);
     });
   }
-  if (f.doc_type) docs = docs.filter((d) => d.doc_type === f.doc_type);
+  if (f.doc_type) {
+    // 1.0.5 (user decision B, `scope::resolve`): the documents classified as the type and the ones that carry the
+    // type's name in their title or file name; `type_match` narrows it to one of the two.
+    const slug = f.doc_type;
+    const names = typeNames(slug);
+    const how = f.type_match ?? "both";
+    docs = docs.filter((d) => (how !== "named" && d.doc_type === slug) || (how !== "classified" && namedAs(d, names)));
+  }
   if (f.project_id) {
     const pid = f.project_id;
     // 0.8.1: a project's 참고 자료 are its reference group — asked for with `role: knowledge`. Where the
@@ -4750,7 +4954,9 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         const project = mp.resolveProjectRef(op.project, ctx.current_project);
         const detailOf = project ? (mp.projectDetail(project.id) ?? null) : null;
         const n = (op.rules ?? []).length > 0 ? (op.rules ?? []).length : (detailOf?.rules.filter((r) => r.enabled).length ?? 0);
-        summary = project ? (ko ? `${project.name} · 규칙 ${n}개 · 문서 ${project.document_count}건` : `${project.name} · ${n} rules · ${project.document_count} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        // The check reads the work documents (`document_count` also counts the project's reference material).
+        const work = project ? project.document_count - (project.reference_count ?? 0) : 0;
+        summary = project ? (ko ? `${project.name} · 규칙 ${n}개 · 문서 ${work}건` : `${project.name} · ${n} rules · ${work} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
         payload = { project_id: project?.id ?? null, rules: n };
         break;
       }
@@ -5098,8 +5304,13 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       const docs = workingSet(plan, imported);
       // (`exec::no_documents`: which kind of document the scope asked for and does not hold)
       if (docs.length === 0) {
-        const kind = plan.scope.filter?.role;
-        const inProject = !!plan.scope.filter?.project_id?.trim();
+        // (1.0.5: the kind is the reason only when it is the only condition besides the project — a type, a tag,
+        // a status, a period … may be what matched nothing)
+        const sf = plan.scope.filter ?? {};
+        const otherConditions =
+          !!sf.doc_type || (sf.tags ?? []).length > 0 || !!sf.status || !!sf.review_status || sf.min_confidence != null || !!sf.vendor || !!sf.keyword || !!sf.date_from || !!sf.date_to || !!plan.scope.folder || (plan.scope.doc_ids ?? []).length > 0;
+        const kind = otherConditions ? null : sf.role;
+        const inProject = !!sf.project_id?.trim();
         const code = kind === "knowledge" ? (inProject ? "no_reference_in_project" : "no_reference_in_scope") : kind === "work" ? "no_work_in_scope" : "no_documents";
         throw err(code === "no_documents" ? "no_documents" : "invalid", code);
       }
@@ -5757,6 +5968,9 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       const result = planText(text, ctx, { routing: ui.routing ?? null });
       // Model calls go through the engine gate: a running batch yields at its next page boundary.
       if (result.source === "model") await gateInteractive(() => sleep(tick(400)));
+      // `planner_bridge::plan` (1.0.5): a document type in the scope takes the documents classified as it and the
+      // ones that carry its name; when the two differ the user says which are meant before anything is previewed.
+      if (!isClarification(result.plan) && (result.choices ?? []).length === 0) askWith(result, typeChoices(result.plan, ctx, ctx.language === "ko"));
       const preview = isClarification(result.plan) ? null : planPreview(result.plan, ctx);
       return { result, preview, context: ctx } satisfies PlanResponse;
     }
@@ -5773,6 +5987,10 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       // `planned_text` after a 되묻기 (PLN-7), else the sentence.
       if (scopeRequired(plan) && !mentionsAll(args.planned_text || text)) {
         throw err("plan_invalid", SCOPE_REQUIRED_MESSAGE, [issue("scope", "scope_required", SCOPE_REQUIRED_MESSAGE)] satisfies PlanIssue[]);
+      }
+      // `preview_only` (1.0.5: a plan picked from the choices of a question): checked and previewed, nothing runs.
+      if (args.preview_only) {
+        return { job_id: null, execution: null, preview: { plan, preview: planPreview(plan, ctx), issues: issues.filter((i) => !i.blocking) } } satisfies ExecuteResponse;
       }
       if (inlineOnly(plan)) {
         const execution = await runPlan(plan, ctx, null, () => undefined);

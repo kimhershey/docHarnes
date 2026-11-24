@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use super::embed::{self, Embedder};
+use super::locate::PageLocator;
 use super::repo::{self, ChunkRow, FtsTable};
 use super::tokenize::{fts_quote, normalize, Analyzer};
 use super::{SearchChannel, SearchHit, SearchMode, SearchRequest, SearchResponse};
@@ -139,8 +140,12 @@ pub fn highlight_ranges(text: &str, needles: &[String]) -> Vec<(usize, usize)> {
 
 /// Window of `text` around the first highlight, with highlights re-based.
 pub fn snippet(text: &str, needles: &[String]) -> (String, Vec<(usize, usize)>) {
+    snippet_of(text, highlight_ranges(text, needles))
+}
+
+/// [`snippet`] from the highlights of the whole text.
+fn snippet_of(text: &str, ranges: Vec<(usize, usize)>) -> (String, Vec<(usize, usize)>) {
     let chars: Vec<char> = text.chars().collect();
-    let ranges = highlight_ranges(text, needles);
     if chars.len() <= SNIPPET_CHARS {
         return (text.to_string(), ranges);
     }
@@ -358,9 +363,13 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
     needles.dedup();
 
     let mut hits = Vec::new();
+    // Where the first highlight of each hit stands in its chunk's text (`(0, 0)`: nothing highlighted).
+    let mut matches: Vec<(usize, usize)> = Vec::new();
     for (id, score) in ranked {
         let Some(row) = by_id.get(&id) else { continue };
-        let (snip, highlights) = snippet(&row.chunk.text, &needles);
+        let ranges = highlight_ranges(&row.chunk.text, &needles);
+        matches.push(ranges.first().map(|(a, b)| (*a, b - a)).unwrap_or((0, 0)));
+        let (snip, highlights) = snippet_of(&row.chunk.text, ranges);
         hits.push(SearchHit {
             chunk_id: id,
             document_id: row.chunk.document_id.clone(),
@@ -379,8 +388,18 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
             score,
             channels: fusion.channels.get(&id).cloned().unwrap_or_default(),
             vector_similarity: similarity.get(&id).copied(),
+            match_page: Some(row.chunk.page_start),
         });
     }
+    // The page of the match: a chunk covers several pages, and the hit is shown — and opened — where
+    // its first highlighted word stands.
+    deps.db.with_read(|c| {
+        let mut locator = PageLocator::default();
+        for (h, (at, len)) in hits.iter_mut().zip(&matches) {
+            h.match_page = locator.of_match(c, &h.document_id, h.page_start, h.page_end, &h.text, *at, *len)?;
+        }
+        Ok(())
+    })?;
     resp.hits = hits;
     resp.elapsed_ms = started.elapsed().as_millis() as u64;
     Ok(resp)

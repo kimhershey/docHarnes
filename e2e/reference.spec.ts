@@ -153,6 +153,54 @@ test.describe("0.5.0 reference material", () => {
     await expect(card(page, "출장비규정-4p.pdf")).toBeVisible();
   });
 
+  // 1.0.5 (user report "프로젝트에 문서를 추가한 뒤에도 프로젝트 문서가 0개로 표시"): the count on the board is what the
+  // project holds — 업무 문서 + 참고 자료, each document once. It used to count the work documents only.
+  test("the card and the list row count a project's 참고 자료: reference material only is not '문서 0건', and a change of kind keeps the total", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\요구사항정의서-v1.2.pdf", "D:\\scan\\정보보안지침.pdf"], { autoLevel: "none" });
+    const srs = await docId(page, "요구사항정의서-v1.2.pdf");
+    const guide = await docId(page, "정보보안지침.pdf");
+    await page.getByTestId("nav-projects").click();
+    const id = await newProject(page, "참고 자료만");
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/);
+    const documents = (count: number) => tpl(ko.projects.card.documents, { count });
+    const projectCard = page.getByTestId(`project-card-${id}`);
+    /** The 문서 cell of the project's row in the list view. */
+    const rowCount = page.getByTestId(`project-row-${id}`).locator("td").nth(6);
+
+    // 참고 자료 only.
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guide}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "reference");
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 0, reference: 1 }));
+    await page.getByTestId("project-back").click();
+    await expect(projectCard.getByText(documents(1))).toBeVisible();
+    await page.getByTestId("projects-view-list").click();
+    await expect(rowCount).toHaveText("1");
+
+    // A work document next to it: two; the reference document made a work document: still two.
+    await page.getByTestId(`project-row-${id}`).getByTestId("project-row-open").click();
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-work").check();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${srs}`)).toHaveAttribute("data-kind", "work");
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 1, reference: 1 }));
+    await page.getByTestId("project-back").click();
+    await expect(rowCount).toHaveText("2");
+    await page.getByTestId(`project-row-${id}`).getByTestId("project-row-open").click();
+    await page.getByTestId(`project-doc-${guide}`).getByTestId("project-doc-kind").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "work", { timeout: 10_000 });
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 2, reference: 0 }));
+    await page.getByTestId("project-back").click();
+    await expect(rowCount).toHaveText("2");
+    await page.getByTestId("projects-view-kanban").click();
+    await expect(projectCard.getByText(documents(2))).toBeVisible();
+  });
+
   test("프로젝트에 넣기: the suggestion picks the project, 참고 자료 / 업무 문서 kinds, an inline new project and a common group", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

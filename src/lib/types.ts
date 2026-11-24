@@ -1197,6 +1197,11 @@ export interface SearchHit {
   score: number;
   channels: SearchChannel[];
   vector_similarity: number | null;
+  /**
+   * 1.0.5 — the page the match stands on (the passage covers `page_start..page_end`); `null`: the document's
+   * pages say nothing about where its text is, no page is shown. Read through `@/lib/sourcePage`.
+   */
+  match_page?: number | null;
 }
 
 export interface SearchResponse {
@@ -1323,6 +1328,12 @@ export interface Citation {
   clause: string | null;
   score: number;
   excerpt: string;
+  /**
+   * 1.0.5 — the page to show and to open: where the question's words stand in the passage, or where the passage
+   * begins (a summary's source). `null`: no page is shown; absent: a source stored before 1.0.5 (`page_start`).
+   * Read through `@/lib/sourcePage`.
+   */
+  match_page?: number | null;
 }
 
 export interface AnswerSentence {
@@ -1890,7 +1901,15 @@ export interface ScopeFilter {
    * covers the project's 참고 자료 next to its 업무 문서. Set by the validator, absent otherwise.
    */
   with_reference?: boolean;
+  /**
+   * 1.0.5: which documents the `doc_type` condition takes — the ones classified as the type, the ones that
+   * carry the type's name in their title or file name, or both (absent = both). Set by the choice the user
+   * makes when the two differ (`PlanResult.choices`), never by the model.
+   */
+  type_match?: TypeMatch | null;
 }
+
+export type TypeMatch = "classified" | "named" | "both";
 
 export interface Scope {
   folder?: string | null;
@@ -1939,6 +1958,21 @@ export interface PlanResult {
   families?: OpFamily[] | null;
   /** `chat` / `general` when the routing call answered instead of planning (0.8.0). */
   route?: AnswerMode | null;
+  /**
+   * 1.0.5: the ready-made plans of a sentence that can be read more than one way. When there are any, `plan`
+   * is the clarification that asks which one is meant; the one the user picks is checked and previewed with
+   * `planner_execute` (`preview_only`) and then runs like a freshly planned plan — nothing is planned again.
+   */
+  choices?: PlanChoice[];
+}
+
+/** One reading of a sentence that has several (`PlanChoice` in `planner/mod.rs`). */
+export interface PlanChoice {
+  /** `project` | `topic` | `project_topic` | `type` | `classified` | `named` | `both`. */
+  key: string;
+  /** The button's text, in the user's language. */
+  label: string;
+  plan: Plan;
 }
 
 export interface DocTypeSummary {
@@ -2076,6 +2110,8 @@ export interface ExecuteArgs {
    * null: the plan was made from `text`.
    */
   planned_text?: string | null;
+  /** Check and preview only: nothing runs, the response carries `preview` (1.0.5: a plan picked from the choices of a question). */
+  preview_only?: boolean;
 }
 
 export interface ExecuteResponse {
@@ -2083,6 +2119,17 @@ export interface ExecuteResponse {
   job_id: string | null;
   /** Set when the plan ran inline. */
   execution: PlanExecution | null;
+  /** Set for a `preview_only` call: the plan as the executor would take it, with its preview. */
+  preview?: PlanCheck | null;
+}
+
+/** A plan checked the way `planner_execute` checks it, without running it (`PlanCheck` in `planner_bridge.rs`). */
+export interface PlanCheck {
+  /** The plan after validation (normalised parameters, default scope, confirmation flag). */
+  plan: Plan;
+  preview: PlanPreview;
+  /** Non-blocking findings (blocking ones make the call fail with `plan_invalid`). */
+  issues: PlanIssue[];
 }
 
 // -- organise / journal --
@@ -2612,7 +2659,10 @@ export interface Project {
   keywords: string[];
   created_at: string;
   updated_at: string;
+  /** Documents the project holds: 업무 문서 + 참고 자료, each document once (1.0.5; work documents only before). */
   document_count: number;
+  /** The part of `document_count` held as 참고 자료 only; absent in a project stored before 1.0.5 (a chat card). */
+  reference_count?: number;
   missing_count: number;
   last_check_at: string | null;
   last_pass: number;

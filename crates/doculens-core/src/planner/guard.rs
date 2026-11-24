@@ -719,6 +719,34 @@ pub fn only_asks(plan: &Plan) -> bool {
         })
 }
 
+/// Plans that only ask and read passages, not whole documents: questions, searches, explanations
+/// and comparisons ([`only_asks`] without the summaries). The type of a document is never a scope
+/// condition for them (1.0.5, user decision B).
+pub fn only_looks_up(plan: &Plan) -> bool {
+    !plan.operations.is_empty()
+        && plan
+            .operations
+            .iter()
+            .all(|op| matches!(op, Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. }))
+}
+
+/// The name of the document type `slug` as the words write it ("계약서", "the contracts" → "contract"):
+/// the longest of its names they carry.
+fn type_word(words: &str, slug: &str, ctx: &super::PlanContext) -> Option<String> {
+    let d = ctx.doc_types.iter().find(|d| d.slug == slug)?;
+    let said = super::compact(words);
+    let aliases = crate::pipeline::schema::doc_type_aliases(slug);
+    [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()]
+        .into_iter()
+        .chain(aliases.iter().copied())
+        .filter(|name| {
+            let key = super::compact(name);
+            key.chars().count() >= 2 && said.contains(&key)
+        })
+        .max_by_key(|name| super::compact(name).chars().count())
+        .map(str::to_string)
+}
+
 /// What a model writes into the type slot to say "whatever the type".
 fn every_type(value: &str) -> bool {
     const ALL: &[&str] = &[
@@ -757,8 +785,9 @@ fn every_type(value: &str) -> bool {
 /// - "all" / "전체" in the type slot is no condition, for every plan;
 /// - a type that does not exist is left out of a plan that only asks (a command keeps the
 ///   validator's error and its re-query: leaving the condition out would widen what it changes);
-/// - a type the user's words do not name is left out of a question / search / explanation /
-///   comparison (a summary keeps the type the model chose: it reads every document in scope).
+/// - a question / search / explanation / comparison takes no type at all (1.0.5, user decision B):
+///   the type goes, with a note when the user's words do not even name it (a summary keeps the type
+///   the model chose: it reads every document in scope).
 pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<PlanIssue> {
     let written = plan.scope.filter.doc_type.clone()?;
     if ctx.doc_types.is_empty() {
@@ -795,19 +824,29 @@ pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             )
         });
     };
-    let retrieves = plan
-        .operations
-        .iter()
-        .all(|op| matches!(op, Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. }));
-    if plan.operations.is_empty() || !retrieves {
+    if !only_looks_up(plan) {
         return None;
     }
-    let named = super::rules::doc_types_named(&super::rules::user_words(text), ctx);
-    if named.iter().any(|d| d.slug == known.slug) {
-        return None;
-    }
-    let (label_ko, label_en) = (known.label_ko.clone(), known.label_en.clone());
+    // 1.0.5 (user decision B): a plan that only asks never takes the type as a condition — the
+    // answer is looked up in every document of the scope, whatever each was classified as. A
+    // search that was left with nothing to look for looks for the type's name, as the user wrote it.
+    let said = super::rules::user_words(text);
+    let (slug, label_ko, label_en) = (known.slug.clone(), known.label_ko.clone(), known.label_en.clone());
     plan.scope.filter.doc_type = None;
+    plan.scope.filter.type_match = None;
+    let named = super::rules::doc_types_named(&said, ctx).iter().any(|d| d.slug == slug);
+    for op in &mut plan.operations {
+        if let Op::Search { query, .. } = op {
+            if query.trim().is_empty() {
+                *query =
+                    type_word(&said, &slug, ctx)
+                        .unwrap_or_else(|| if ko { label_ko.clone() } else { label_en.clone() });
+            }
+        }
+    }
+    if named {
+        return None;
+    }
     Some(PlanIssue::warn(
         "scope.filter.doc_type",
         "doc_type_ignored",
@@ -817,6 +856,215 @@ pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             format!("the type condition '{label_en}' is not in the sentence and was left out")
         },
     ))
+}
+
+/// What a model writes into a filter to say "reference material" / "work documents": a kind of
+/// document, which the scope names with `role` — never a tag or a word of a file name.
+fn is_kind_word(value: &str) -> bool {
+    const KINDS: &[&str] = &[
+        "knowledge",
+        "reference",
+        "references",
+        "referencematerial",
+        "referencedocument",
+        "referencedocuments",
+        "참고자료",
+        "참고문서",
+        "레퍼런스",
+        "지식문서",
+        "work",
+        "workdocument",
+        "workdocuments",
+        "업무문서",
+        "작업문서",
+    ];
+    KINDS.contains(&super::compact(value).as_str())
+}
+
+/// Whether the user's words say the status the scope filters by ("검토 끝난 문서", "새 문서",
+/// "오류 난 문서") — or speak of a status at all.
+fn status_said(status: &str, words: &str) -> bool {
+    let of: &[&str] = match status.trim().to_lowercase().as_str() {
+        "new" => &["새문서", "새로", "새파일", "신규", "미처리", "처리안", "처리전", "처리되지", "new", "unprocessed"],
+        "rendered" => &["렌더", "변환", "미추출", "추출전", "추출안", "추출되지", "rendered", "converted"],
+        "extracted" => &["추출", "미검토", "검토전", "검토안", "검토대기", "검토되지", "extracted", "unreviewed"],
+        "reviewed" => &[
+            "검토",
+            "리뷰",
+            "승인",
+            "확인된",
+            "확인한",
+            "확정",
+            "완료",
+            "review*",
+            "approv*",
+            "verified",
+            "checked",
+            "done",
+        ],
+        "archived" => &["보관", "아카이브", "archiv*"],
+        "missing" => &["누락", "없어진", "사라진", "찾을수없", "missing", "lost"],
+        "error" => &["오류", "에러", "실패", "error*", "fail*"],
+        "importing" => &["가져오는", "불러오는", "import*"],
+        _ => &[],
+    };
+    super::rules::says(words, of) || super::rules::says(words, &["상태", "status"])
+}
+
+/// 1.0.5 — scope conditions the sentence does not say (user report: with a project named, the
+/// reference-material scope fails with "이 범위에는 참고 자료가 없습니다"). Gemma 4 E4B wrote
+/// (`eval/results/planner-real-model/gemma4-e4b-q4km-1.0.5-project-reference-before.json`):
+/// "AAA 참고자료 요약해줘" → `status: "reviewed"`; "한빛 납품 프로젝트의 참고 자료를 요약해줘" →
+/// `tags: ["한빛 납품"]`; "AAA프로젝트 참고자료 요약" → `tags: ["AAA"]`; and for "AAA 프로젝트의
+/// 참고자료에서 요구사항 정의서 요약해줘" the operations `[manage_reference add, summarize]` with
+/// `tags: ["knowledge"]` — a step that changes reference material for a sentence that only asks for a
+/// summary. No document carries those marks, the scope is empty and the step fails. Run before the
+/// validator, on model plans:
+/// - a step that puts documents somewhere or marks them (`manage_reference` / `add_to_project` /
+///   `set_role`) next to steps that read, in a sentence without a verb for it, is taken out — the
+///   reading steps remain (a plan of nothing but such a step is left to the other checks);
+/// - in a plan that only reads, a filter stays only when the user's words carry it: a tag they
+///   write that is a tag (one of the workspace's, or the sentence says "태그") and not the name of a
+///   project, a kind of document or a document type; a status / review state they speak of; a
+///   confidence with its number; the vendor or the file-name keyword itself; a period.
+///
+/// A plan that changes or processes documents keeps every condition the model wrote: a condition
+/// less would widen what it changes, a condition too many only finds nothing.
+/// `where_to_look` then fills the project and the kind from the sentence.
+pub fn unsaid_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> Vec<PlanIssue> {
+    const CHANGE_VERBS: &[&str] = &[
+        "넣어",
+        "넣기",
+        "넣고",
+        "넣을",
+        "추가",
+        "등록",
+        "지정",
+        "빼",
+        "제거",
+        "삭제",
+        "지워",
+        "지우",
+        "옮겨",
+        "옮기",
+        "이동",
+        "만들",
+        "생성",
+        "표시",
+        "바꿔",
+        "바꾸",
+        "변경",
+        "해제",
+        "담아",
+        "포함시",
+        "켜줘",
+        "꺼줘",
+        "add",
+        "remove",
+        "delete",
+        "move",
+        "create",
+        "put",
+        "mark",
+        "set",
+        "assign",
+        "register",
+        "make",
+        "enable",
+        "disable",
+        "rename",
+    ];
+    let ko = ctx.language == crate::settings::Language::Ko;
+    if plan.is_clarification() || plan.operations.is_empty() {
+        return Vec::new();
+    }
+    let words = super::rules::user_words(text);
+    let said = super::compact(&words);
+    let mut left_out: Vec<String> = Vec::new();
+    // 1. A step that changes where documents belong, for a sentence that only asks to read.
+    let places = |op: &Op| matches!(op, Op::ManageReference { .. } | Op::AddToProject { .. } | Op::SetRole { .. });
+    let reads = plan.operations.iter().any(super::validate::only_reads);
+    if reads && plan.operations.iter().any(places) && !super::rules::says(&words, CHANGE_VERBS) {
+        plan.operations.retain(|op| !places(op));
+        if !plan.operations.iter().any(|o| o.kind() == plan.intent) {
+            plan.recompute_intent();
+        }
+        left_out
+            .push(if ko { "문서를 넣거나 지정하는 단계" } else { "the step that puts or marks documents" }.to_string());
+    }
+    // 2. Filters nobody asked for, in a plan that only reads.
+    let scope = plan.scope.clone();
+    let changes = plan.operations.iter().any(|op| {
+        super::validate::reads_scope(op, &scope) && !super::validate::only_reads(op) && !matches!(op, Op::Answer { .. })
+    });
+    if !changes {
+        let carried = |value: &str| {
+            let key = super::compact(value);
+            !key.is_empty() && said.contains(&key)
+        };
+        let tag_word =
+            said.contains("태그") || words.contains('#') || super::rules::says(&words, &["tag", "tags", "tagged"]);
+        let f = &mut plan.scope.filter;
+        let before = f.tags.len();
+        f.tags.retain(|tag| {
+            let key = super::compact(tag);
+            carried(tag)
+                && project_of(tag, ctx).is_none()
+                && !is_kind_word(tag)
+                && !is_type_name(tag, ctx)
+                && (tag_word || ctx.tags.iter().any(|known| super::compact(known) == key))
+        });
+        if f.tags.len() != before {
+            left_out.push(if ko { "태그" } else { "tags" }.to_string());
+        }
+        if f.status.as_deref().is_some_and(|status| !status_said(status, &words)) {
+            f.status = None;
+            left_out.push(if ko { "문서 상태" } else { "status" }.to_string());
+        }
+        const REVIEW_WORDS: &[&str] =
+            &["검토", "리뷰", "승인", "대기", "확인", "review*", "pending", "approv*", "verified", "unreviewed"];
+        if f.review_status.is_some() && !super::rules::says(&words, REVIEW_WORDS) {
+            f.review_status = None;
+            left_out.push(if ko { "검토 상태" } else { "review state" }.to_string());
+        }
+        if let Some(min) = f.min_confidence {
+            let numbers = super::rules::numbers_said(&words);
+            let number = numbers.iter().any(|n| (n - min).abs() < 1e-6 || (n - min * 100.0).abs() < 1e-6);
+            if !number && !super::rules::says(&words, &["신뢰도", "신뢰", "확신", "정확도", "confidence", "confident"])
+            {
+                f.min_confidence = None;
+                left_out.push(if ko { "신뢰도" } else { "confidence" }.to_string());
+            }
+        }
+        // (the name of a project is where to look — `where_to_look` — not a word of a file name)
+        let not_a_word = |value: &str| !carried(value) || project_of(value, ctx).is_some() || is_kind_word(value);
+        if f.vendor.as_deref().is_some_and(not_a_word) {
+            f.vendor = None;
+            left_out.push(if ko { "거래처" } else { "vendor" }.to_string());
+        }
+        if f.keyword.as_deref().is_some_and(not_a_word) {
+            f.keyword = None;
+            left_out.push(if ko { "파일 이름 조건" } else { "file-name keyword" }.to_string());
+        }
+        if (f.date_from.is_some() || f.date_to.is_some()) && !super::rules::mentions_date(text, ctx.today) {
+            f.date_from = None;
+            f.date_to = None;
+            left_out.push(if ko { "기간" } else { "period" }.to_string());
+        }
+    }
+    if left_out.is_empty() {
+        return Vec::new();
+    }
+    let list = left_out.join(", ");
+    vec![PlanIssue::warn(
+        "scope.filter",
+        "scope_ignored",
+        if ko {
+            format!("문장에 없는 조건은 빼고 진행합니다({list})")
+        } else {
+            format!("what the sentence does not say was left out ({list})")
+        },
+    )]
 }
 
 /// 0.8.2 — a sentence the routing call read as a question / search / summary is answered, not
@@ -1137,21 +1385,36 @@ fn phrase_en(line: &str) -> Option<About> {
 /// Whether `subject` is nothing but the name of a document type ("계약서", "견적서들", "계약서 내용"):
 /// "계약서에 대해 요약해줘" asks for the contracts to be summarised, not for passages about the word.
 fn is_type_name(subject: &str, ctx: &super::PlanContext) -> bool {
+    type_named(subject, ctx).is_some()
+}
+
+/// The document type `subject` is nothing but the name of ([`is_type_name`]).
+pub(super) fn type_named<'a>(subject: &str, ctx: &'a super::PlanContext) -> Option<&'a super::DocTypeSummary> {
     let key = super::compact(subject);
     let key = key.strip_prefix("모든").unwrap_or(&key);
     let key = ["들", "문서", "내용", "전체", "전부"].iter().find_map(|w| key.strip_suffix(w)).unwrap_or(key);
-    !key.is_empty()
-        && ctx.doc_types.iter().any(|d| {
-            let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
-            [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()]
-                .into_iter()
-                .chain(aliases.iter().copied())
-                .any(|label| super::compact(label) == key)
-        })
+    if key.is_empty() {
+        return None;
+    }
+    ctx.doc_types.iter().find(|d| {
+        let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+        [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()]
+            .into_iter()
+            .chain(aliases.iter().copied())
+            .any(|label| super::compact(label) == key)
+    })
+}
+
+/// The subject a sentence names and the rest of it, with a project named in front of the subject
+/// moved to the rest ("AAA 프로젝트 검수 기준에 대해 …" → `검수 기준`): what `summary_topic` reads,
+/// before it decides whether the subject is one to look up.
+pub(super) fn subject_of(text: &str, ctx: &super::PlanContext) -> Option<About> {
+    let a = project_in_front(about_phrase(text)?, ctx);
+    names_a_subject(&a.subject).then_some(a)
 }
 
 /// The project `subject` is the name of: "AAA", "AAA 프로젝트", "the AAA project".
-fn project_of<'a>(subject: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
+pub(super) fn project_of<'a>(subject: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
     let bare = |s: &str| {
         let key = super::compact(s);
         let cut = key.strip_suffix("프로젝트").or_else(|| key.strip_suffix("project")).unwrap_or(&key);
@@ -1172,7 +1435,7 @@ fn project_of<'a>(subject: &str, ctx: &'a super::PlanContext) -> Option<&'a supe
 /// Whether the words outside the phrase that names the subject ask for a summary to be made: "요약해줘",
 /// "요약 좀", "… 관련 요약". A summary that already exists is not one to make — "지난 회의에 대한 요약본
 /// 찾아줘", "…에 관한 요약 보고서 열어줘" — and "요약에 대해 알려줘" asks none.
-fn asks_summary(rest: &str) -> bool {
+pub(super) fn asks_summary(rest: &str) -> bool {
     const ASKS: &[&str] = &[
         "요약해",
         "요약하",
@@ -1193,20 +1456,32 @@ fn asks_summary(rest: &str) -> bool {
         || rest.to_lowercase().contains("summar")
 }
 
+/// Words that ask for the documents themselves — a list of hits, a place — rather than for what they say.
+const FIND_WORDS: &[&str] =
+    &["찾아", "찾기", "검색", "어디", "목록", "리스트", "find", "search*", "where", "list", "locate"];
+
 /// Whether the words outside the subject ask for it to be explained: "설명해줘", "설명 좀" (not a
-/// "설명서").
-fn asks_explanation(rest: &str) -> bool {
+/// "설명서") — or to be told (1.0.5, user decision: "알려줘" asks for an answer like "설명해줘" does,
+/// never for a list of hits): "알려줘", "알려 주세요", "tell me". Not when what is to be told is a
+/// list, a place or a count ("… 문서 목록 알려줘", "… 몇 건인지 알려줘"): that is a question of its own.
+pub(super) fn asks_explanation(rest: &str) -> bool {
     const ASKS: &[&str] = &["설명해", "설명하", "설명좀", "설명부탁", "설명을해", "설명을부탁", "설명바"];
+    const COUNTS: &[&str] = &["몇", "얼마", "합계", "총액", "건수", "개수", "how many", "how much", "total", "count"];
     let said = super::compact(rest);
+    let lower = rest.to_lowercase();
+    let tells = (said.contains("알려") || lower.contains("tell me"))
+        && !super::rules::says(rest, FIND_WORDS)
+        && !super::rules::says(rest, COUNTS);
     ASKS.iter().any(|a| said.contains(a))
         || said.ends_with("설명")
         || said.ends_with("설명을")
-        || rest.to_lowercase().contains("explain")
+        || lower.contains("explain")
+        || tells
 }
 
 /// Whether the words outside the subject name where to look in the workspace: a project, or what is
 /// open or selected ("이 문서에서", "현재 문서에서").
-fn says_where(rest: &str, ctx: &super::PlanContext) -> bool {
+pub(super) fn says_where(rest: &str, ctx: &super::PlanContext) -> bool {
     project_named(rest, ctx).is_some() || super::rules::points(rest)
 }
 
@@ -1502,6 +1777,49 @@ pub fn summary_about(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             },
         )
     })
+}
+
+/// 1.0.5 (user decision A) — "알려줘" is an answer, not a search. A sentence that asks to be told or
+/// explained something ("납품 기한 알려줘", "지체상금이 뭐야") and came back as a plain `search` — a
+/// list of passages — is answered from the documents instead: one grounded `answer` to the user's
+/// words, in the scope the plan had. A sentence that asks for the documents themselves ("… 찾아줘",
+/// "어디 있어", "목록 알려줘") stays a search, and so does a search that groups its hits.
+pub fn tell_is_answer(text: &str, plan: &mut Plan, ko: bool) -> bool {
+    const ASKS: &[&str] =
+        &["알려", "설명", "뭐야", "무엇", "뭔지", "what is", "what's", "whats", "what are", "explain*", "tell me"];
+    let [Op::Search { group_by: None, .. }] = plan.operations.as_slice() else { return false };
+    let said = super::rules::user_words(text);
+    if !super::rules::says(&said, ASKS) || super::rules::says(&said, FIND_WORDS) {
+        return false;
+    }
+    plan.operations =
+        vec![Op::Answer { question: said.trim().to_string(), cite: None, knowledge: None, mode: None, reply: None }];
+    plan.intent = OpKind::Answer;
+    plan.summary = Some(if ko { "문서에서 찾아 답합니다" } else { "Answers from the documents" }.to_string());
+    true
+}
+
+/// 1.0.5 — "'위약금' 들어간 계약서 찾아줘" came back from Gemma 4 E4B as `open` (document, ref "위약금")
+/// with the card saying "… 검색합니다" (eval run of 2026-11-24): a document of that name is looked for
+/// and not found. A sentence that asks to find something and does not ask to open it is a search for
+/// what the plan named — and, as for every search, a document type is no condition of it.
+pub fn find_is_search(text: &str, plan: &mut Plan, ko: bool) -> bool {
+    const FINDS: &[&str] = &["찾아", "찾기", "검색", "find", "search*", "look for", "locate"];
+    const OPENS: &[&str] = &["열어", "열기", "열람", "보여", "띄워", "open", "show"];
+    let [Op::Open { target: super::OpenTarget::Document, reference }] = plan.operations.as_slice() else {
+        return false;
+    };
+    let said = super::rules::user_words(text);
+    if !super::rules::says(&said, FINDS) || super::rules::says(&said, OPENS) {
+        return false;
+    }
+    let query = if reference.trim().is_empty() { said.trim().to_string() } else { reference.trim().to_string() };
+    plan.operations = vec![Op::Search { query, mode: None, top_k: None, group_by: None }];
+    plan.intent = OpKind::Search;
+    plan.scope.filter.doc_type = None;
+    plan.scope.filter.type_match = None;
+    plan.summary = Some(if ko { "문서에서 찾습니다" } else { "Searches the documents" }.to_string());
+    true
 }
 
 /// What a sentence that points at "this document" is told when none is open or selected.
@@ -1806,7 +2124,7 @@ fn query_without_kind(query: &str, also: bool) -> String {
 }
 
 /// The one project the user's words name (a name that is part of a longer named one counts for the longer).
-fn project_named<'a>(text: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
+pub(super) fn project_named<'a>(text: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
     let said = super::compact(&super::rules::user_words(text));
     let hits: Vec<(&super::ProjectSummary, String)> = ctx
         .projects
@@ -1933,24 +2251,15 @@ pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
     }
     if let Some(topic) = &topic {
         let scoped = plan.scope.filter.project_id.as_deref();
-        if let Some(p) = project_of(topic, ctx).filter(|p| scoped != Some(p.id.as_str())) {
-            // The subject is also the name of a project: say which reading this is, and the other one.
-            notes.push(PlanIssue::warn(
-                "operations[0].topic",
-                "topic_names_project",
-                if ko {
-                    format!(
-                        "'{0}'은(는) 프로젝트 이름이기도 합니다. 지금은 문서에서 '{0}'에 관한 내용을 찾습니다. 그 프로젝트의 문서 전체를 요약하려면 \"{0} 프로젝트 요약해줘\"라고 하세요.",
-                        p.name
-                    )
-                } else {
-                    format!(
-                        "'{0}' is also the name of a project. This looks up what the documents say about '{0}'; for a summary of the project's documents say \"summarise the {0} project\".",
-                        p.name
-                    )
-                },
-            ));
-        } else if scoped.is_none() && !named_documents && ctx.scope_project.is_none() && said_a_project(&place) {
+        // (a subject that is also the name of a project is asked about before the plan is made —
+        // `choices::overlap`, 1.0.5; the note that named the other reading is gone)
+        let names_another = project_of(topic, ctx).is_some_and(|p| scoped != Some(p.id.as_str()));
+        if !names_another
+            && scoped.is_none()
+            && !named_documents
+            && ctx.scope_project.is_none()
+            && said_a_project(&place)
+        {
             // A project the words name and the workspace does not have: said, not silently widened.
             notes.push(PlanIssue::warn(
                 "scope.filter.project_id",
@@ -2419,12 +2728,13 @@ mod tests {
         assert_eq!(notes, vec!["summary_topic"]);
         assert_eq!(p.summary.as_deref(), Some("'AA'에 관한 내용을 문서에서 찾아 요약합니다"));
         // t-2: one summary per project of the library. The subject is content even when a project is
-        // called so (user decision 2026-11-20): AAA is looked up in every document, and the card says
-        // how to ask for the project instead.
+        // called so (user decision 2026-11-20): AAA is looked up in every document. (Which reading is
+        // meant is asked before the plan runs since 1.0.5 — `choices::overlap`; the note that named
+        // the other reading is gone.)
         let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![plain(Some(SummaryGroup::Project))]));
         assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
         assert!(p.scope.is_empty() && !p.requires_confirmation, "{p:?}");
-        assert_eq!(notes, vec!["summary_topic", "topic_names_project"]);
+        assert_eq!(notes, vec!["summary_topic"]);
         // t-4: "요구사항" is part of the subject — no document type is named.
         let (p, notes) = run("보안 요구사항에 대해 요약해줘", model_plan(vec![plain(Some(SummaryGroup::None))]));
         assert_eq!(topic_of(&p).as_deref(), Some("보안 요구사항"));
@@ -2544,13 +2854,13 @@ mod tests {
         assert_eq!(topic_of(&p).as_deref(), Some("AA"));
         assert!(p.scope.is_empty(), "{:?}", p.scope);
         assert_eq!(notes, vec!["summary_topic"]);
-        // A name alone is content, whatever is called so: no project scope, and the card says how to
-        // ask for the project (user decision 2026-11-20).
+        // A name alone is content, whatever is called so: no project scope (user decision 2026-11-20;
+        // the question that offers the project instead is `choices::overlap`'s, 1.0.5).
         for op in [about("AAA"), Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: None }] {
             let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![op]), &ctx);
             assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
             assert!(p.scope.is_empty(), "{:?}", p.scope);
-            assert_eq!(notes.last().map(String::as_str), Some("topic_names_project"), "{notes:?}");
+            assert!(!notes.iter().any(|n| n == "topic_names_project"), "{notes:?}");
         }
         // The project slot alone — the word "프로젝트" names it: one summary of its documents, no topic.
         for text in ["AAA 프로젝트에 대해 요약해줘", "AAA 프로젝트에 관해서 요약해줘"] {

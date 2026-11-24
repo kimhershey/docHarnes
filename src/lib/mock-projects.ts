@@ -234,6 +234,15 @@ function docsOf(s: PState, projectId: string): MockDoc[] {
   return wsDocs().filter((d) => ids.has(d.id));
 }
 
+/** `repo::reference_only_by_project`: existing documents of the project's reference group that are not among its work documents. */
+function referenceOnlyCount(work: MockDoc[], projectId: string): number {
+  const reference = new Set(projectReferenceDocIds(projectId));
+  if (reference.size === 0) return 0;
+  for (const d of work) reference.delete(d.id);
+  if (reference.size === 0) return 0;
+  return wsDocs().filter((d) => reference.has(d.id)).length;
+}
+
 function docTypeLabel(slug: string): { ko: string; en: string } {
   const info = pl.docTypeList().find((d) => d.slug === slug);
   return info ? { ko: info.label_ko, en: info.label_en } : { ko: slug, en: slug };
@@ -284,7 +293,10 @@ export function overdueFor(p: Pick<Project, "phase" | "end_date" | "missing_coun
 
 function refresh(s: PState, p: Project): Project {
   const docs = docsOf(s, p.id);
-  p.document_count = docs.length;
+  // `repo::fill_counters` (1.0.5): the count the cards show = work documents + the documents the project holds as
+  // reference material only, each document once; the checklist still reads the work documents.
+  p.reference_count = referenceOnlyCount(docs, p.id);
+  p.document_count = docs.length + p.reference_count;
   p.missing_count = checklist(s, p).filter((c) => c.missing).length;
   const last = lastRun(s, p.id);
   p.last_check_at = last?.finished_at ?? null;
@@ -474,6 +486,7 @@ function upsertProject(s: PState, input: ProjectInput): Project {
       created_at: now(),
       updated_at: now(),
       document_count: 0,
+      reference_count: 0,
       missing_count: 0,
       last_check_at: null,
       last_pass: 0,

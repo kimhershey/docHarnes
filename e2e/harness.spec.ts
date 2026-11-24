@@ -305,6 +305,54 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(page.locator('[data-testid="assistant-card-clarify"]').last()).toContainText("열려 있거나 선택한 문서가 없습니다", { timeout: 15_000 });
   });
 
+  // 1.0.5 (user decision C): a sentence that can be read more than one way is asked about before anything runs,
+  // with every reading as a button. The plan behind a button is ready-made: picking it runs that plan — no
+  // second interpretation, no second question.
+  test("a subject that is also a project's or a type's name is asked about with choices, and a picked reading runs as it is", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf"]);
+    const guide = await docId(page, "정보보안지침.pdf");
+    await newProject(page, "정보보안");
+    await addToOpenProject(page, guide);
+
+    await openAssistantScreen(page);
+    await send(page, "정보보안에 대해서 요약해줘");
+    const question = assistantCard(page, "clarify").last();
+    await expect(question.getByTestId("clarify-question")).toHaveText("'정보보안' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?", { timeout: 15_000 });
+    const readings = question.getByTestId("clarify-choice");
+    await expect(readings).toHaveCount(3);
+    await expect(readings.nth(0)).toHaveText("'정보보안' 프로젝트의 문서 전체를 요약");
+    await expect(readings.nth(2)).toHaveText("'정보보안' 프로젝트의 문서에서 '정보보안'에 관한 내용을 찾아 요약");
+    // Nothing has run yet, and the reply box is still there for an answer in the user's own words.
+    await expect(assistantCard(page, "result")).toHaveCount(0);
+    await expect(question.getByTestId("clarify-reply")).toBeVisible();
+
+    // The project's documents: one summary of the one document it holds — and no other question.
+    await question.locator('[data-choice="project"]').click();
+    await expect(question).toHaveAttribute("data-clarify-status", "answered");
+    await expect(question.locator('[data-choice="project"]')).toHaveAttribute("aria-pressed", "true");
+    const whole = assistantCard(page, "result").last();
+    await expect(whole).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(whole.getByTestId("result-summary-group")).toHaveCount(1);
+    await expect(whole.getByTestId("result-summary-group").first()).toContainText("정보보안지침");
+    await expect(assistantCard(page, "clarify")).toHaveCount(1);
+    await expect(question.getByTestId("clarify-reply")).toHaveCount(0);
+
+    // The name of a document type: the documents of that type, or what the documents say about the word.
+    await send(page, "견적서에 대해 요약해줘");
+    const typed = assistantCard(page, "clarify").last();
+    await expect(typed.getByTestId("clarify-question")).toHaveText("'견적서'는 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?", { timeout: 15_000 });
+    await expect(typed.getByTestId("clarify-choice")).toHaveCount(2);
+    await typed.locator('[data-choice="topic"]').click();
+    await expect(typed).toHaveAttribute("data-clarify-status", "answered");
+    const about = assistantCard(page, "result").last();
+    await expect(about).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(about).toContainText("'견적서'에 관한 내용");
+    await expect(assistantCard(page, "clarify")).toHaveCount(2);
+  });
+
   test("a change the sentence does not name waits for approval with the reason on the card", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

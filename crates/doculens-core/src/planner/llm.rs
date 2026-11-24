@@ -15,8 +15,8 @@ use crate::settings::{Language, Profile};
 
 use super::rules::is_compound;
 use super::{
-    fastpath, guard, has_errors, prompts, rules, schema, validate, AnswerMode, Op, OpFamily, OpKind, OpenTarget, Plan,
-    PlanContext, PlanIssue, PlanMode, PlanResult, PlanSource, MIN_CONFIDENCE,
+    choices, fastpath, guard, has_errors, prompts, rules, schema, validate, AnswerMode, Op, OpFamily, OpKind,
+    OpenTarget, Plan, PlanContext, PlanIssue, PlanMode, PlanResult, PlanSource, MIN_CONFIDENCE,
 };
 
 /// Model access for the planner (`None` in `plan` = rules only).
@@ -97,6 +97,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         raw: None,
         families: Vec::new(),
         route: None,
+        choices: Vec::new(),
     };
     if text.is_empty() {
         return Ok(result);
@@ -151,6 +152,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                     result.source = PlanSource::Rules;
                     result.plan = scoped(p);
                     result.issues = issues;
+                    ask_which(&mut result, text, ctx, ko);
                     return Ok(result);
                 }
             }
@@ -175,6 +177,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 result.source = PlanSource::Rules;
                 result.plan = scoped(p);
                 result.issues = issues;
+                ask_which(&mut result, text, ctx, ko);
                 return Ok(result);
             }
             // A rule that produced an invalid plan (e.g. unknown field) still beats a model guess:
@@ -248,10 +251,14 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                     issues.extend(checked);
                     result.plan = scoped(asked);
                     result.issues = issues;
+                    ask_which(&mut result, text, ctx, ko);
                     return Ok(result);
                 }
             }
             result.plan = p;
+            // (a subject that is also the name of a project or of a document type is asked about,
+            // whatever the turn was routed as)
+            ask_which(&mut result, text, ctx, ko);
             return Ok(result);
         }
         Ok((Route::Families(families), (p, c))) => {
@@ -360,6 +367,14 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 guard::explain_what_was_said(text, &mut plan);
                 // "AA에 대해서 요약해줘": the subject the sentence names is what the summary is about.
                 issues.extend(guard::summary_about(text, &mut plan, ctx, ko));
+                // "… 찾아줘" asks for a search: opening a document of that name is not one (1.0.5).
+                if guard::find_is_search(text, &mut plan, ko) {
+                    log::info!("planner: an open for a sentence that asks to find; searching the documents");
+                }
+                // "… 알려줘" asks for an answer: a list of hits is not one (1.0.5).
+                if guard::tell_is_answer(text, &mut plan, ko) {
+                    log::info!("planner: a search for a sentence that asks to be told; answering from the documents");
+                }
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
@@ -393,7 +408,12 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                     plan.scope.filter.project_id = None;
                 }
                 result.issues = issues;
-                result.plan = scoped(finalize(plan, ko));
+                // A sentence that reads two ways is asked about with its readings as choices (1.0.5) —
+                // before a low confidence turns the plan into "… 맞나요?".
+                result.plan = scoped(plan.clone());
+                if !ask_which(&mut result, text, ctx, ko) {
+                    result.plan = scoped(finalize(plan, ko));
+                }
                 return Ok(result);
             }
             Err(issues) => {
@@ -551,20 +571,39 @@ fn parse_and_validate(
     ko: bool,
 ) -> std::result::Result<(Plan, Vec<PlanIssue>), Vec<PlanIssue>> {
     let mut plan = validate::parse_plan(value).map_err(|i| vec![i])?;
+    // (how a type condition matches is the user's choice, never the model's — `choices::type_overlap`)
+    plan.scope.filter.type_match = None;
     // A type is a condition only when the user's words name one (0.8.2): "all" in the type slot,
     // or a type no question needs, must not fail the plan.
     let untyped = guard::untyped_scope(text, &mut plan, ctx, ko);
+    // … and so is every other condition (1.0.5): a tag, a status, a period the sentence does not say
+    // is not a filter, and a step that changes reference material is not part of a summary.
+    let unsaid = guard::unsaid_scope(text, &mut plan, ctx);
     // … and a summary has a subject only when they name one (1.0.2), and a length only when they
     // say one (1.0.3).
     guard::unsaid_topic(text, &mut plan, ctx);
     guard::unsaid_length(text, &mut plan);
     let mut issues = validate::validate(&mut plan, ctx, date);
     issues.extend(untyped);
+    issues.extend(unsaid);
     if has_errors(&issues) {
         Err(issues)
     } else {
         Ok((plan, issues))
     }
+}
+
+/// 1.0.5 (user decision C): a plan of a sentence that can be read two ways — its subject is also
+/// the name of a project or of a document type — becomes a question with the readings as choices
+/// (`choices::overlap`). Returns whether it did.
+fn ask_which(result: &mut PlanResult, text: &str, ctx: &PlanContext, ko: bool) -> bool {
+    let Some((question, readings)) = choices::overlap(text, &result.plan, ctx, ko) else { return false };
+    result.plan = choices::question_plan(question, &result.plan);
+    result.choices = readings;
+    // (the notes were about the reading that is now one of several; each choice is checked again
+    // when it is picked)
+    result.issues.retain(|i| i.blocking);
+    true
 }
 
 /// Document-changing ops without a scope ask which documents are meant, unless the sentence

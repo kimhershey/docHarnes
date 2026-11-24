@@ -115,6 +115,8 @@ cargo run -p doculens-eval --release -- planner --golden eval/golden/planner.jso
 - **원인 분류**(결과 JSON `cause`, 보고서 묶음): `no_rule` 규칙 없음(모델 필요) · `rule_clarified` 규칙이 되묻기로 후퇴 ·
   `over_interpretation` 과잉 해석(되묻기·무시가 정답) · `wrong_ops` 의도·연산 오판 · `params` 파라미터 누락·오류 ·
   `scope` 범위 오류 · `confirmation` 확인 여부나 `unmet` 표시가 다름.
+- 1.0.5: `expected.choices`(선택) — 되묻기가 내놓는 해석 선택지의 키를 순서대로 적습니다(`["project", "topic", "project_topic"]`, `["type", "topic"]`). 겹치는 문장은 `intent: clarify` + 이 칸으로 기대값을 씁니다.
+  유형 겹침 선택지(`classified` / `named` / `both`)는 DB가 있어야 생기므로 골든셋으로는 재지 않습니다(코어 테스트 `planner/tests/exec_tests/v105.rs`). 1.0.5의 골든셋은 214문장, 규칙 경로 205건(95.8 %)입니다.
 - 설정 변경은 `set_setting`(key · value) 하나입니다(설정 전용 동작 다섯 개는 1.0.4에서 없앴습니다). 기대값도 그렇게 적습니다. `explain`은 모델에게 보이지 않아(규칙 경로에는 남음) 설명 문장의 기대값에는 `alt`로 `answer`를 함께 둡니다. 모델에게 보이는 동작은 58종 가운데 57종입니다.
 - 덮는 연산 종류: `OpKind::ALL` 58종 가운데 54종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
   골든 항목이 없습니다. 파라미터는 `expected.params`를 적은 항목만 검사하므로 연산 종류만 채점하는 항목이 섞여 있습니다(P6에서

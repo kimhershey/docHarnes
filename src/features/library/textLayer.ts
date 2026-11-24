@@ -133,6 +133,28 @@ export function matchWords(layout: PageLayout | null | undefined, needles: strin
   return hits;
 }
 
+/**
+ * The lines of a cited passage to mark on the open page (a source opened without a query): its first `count`
+ * lines that stand on this page. A passage runs over several pages and a source opens on the page of its match
+ * (1.0.5), which is not always the one the passage begins on — its opening lines marked nothing there. While
+ * nothing of it is found on the page (the page is still loading), the opening lines.
+ */
+export function passageNeedles(passage: { text: string; heading_path: string | null }, onPage: (line: string) => boolean, count = 3): string[] {
+  const body = passage.heading_path && passage.text.startsWith(passage.heading_path) ? passage.text.slice(passage.heading_path.length) : passage.text;
+  const lines = body
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 4)
+    .map((l) => Array.from(l).slice(0, 80).join(""));
+  const here: string[] = [];
+  for (const line of lines) {
+    if (!onPage(line)) continue;
+    here.push(line);
+    if (here.length >= count) break;
+  }
+  return here.length > 0 ? here : lines.slice(0, count);
+}
+
 /** Display width of a word in "units" (CJK ≈ 1, Latin / digits ≈ 0.55) — the Rust `layout::units`. */
 export function displayUnits(text: string): number {
   let n = 0;

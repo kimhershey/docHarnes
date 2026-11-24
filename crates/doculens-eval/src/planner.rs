@@ -90,6 +90,9 @@ pub struct ItemResult {
     /// Codes of the notes the planner attached (`ungrounded_change`, `grouping_dropped`, …).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// Keys of the readings a question offers (1.0.5, `PlanResult.choices`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
     /// A wrong plan that changes something and would have run without asking.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unasked_change: bool,
@@ -244,7 +247,8 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
         latencies.push(latency_ms);
         let kind = item.kind().to_string();
         kind_latencies.entry(kind.clone()).or_default().push(latency_ms);
-        let mismatches = golden::compare(&item.expected, &r.plan);
+        let choices: Vec<String> = r.choices.iter().map(|c| c.key.clone()).collect();
+        let mismatches = golden::compare(&item.expected, &r.plan, &choices);
         let correct = mismatches.is_empty();
         let cause = cause(&item.expected, &r, &mismatches).map(String::from);
         let ops = golden::op_kinds(&r.plan);
@@ -293,6 +297,7 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
             unmet: r.plan.unmet.clone(),
             route: r.route.clone(),
             notes: r.issues.iter().map(|i| i.code.clone()).collect(),
+            choices,
             unasked_change,
             attempts: r.attempts,
             prompt_tokens: r.prompt_tokens,

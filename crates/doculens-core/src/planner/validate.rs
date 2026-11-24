@@ -66,7 +66,7 @@ pub const MAX_CARRIED_TEXT_CHARS: usize = 60_000;
 /// Whether the op reads the plan scope (the documents in scope or its project filter).
 /// Settings, navigation, project / template / schema / glossary administration and the ops that
 /// carry their own targets do not; `create_project` only takes documents the scope names.
-fn reads_scope(op: &Op, scope: &super::Scope) -> bool {
+pub(super) fn reads_scope(op: &Op, scope: &super::Scope) -> bool {
     match op {
         Op::Classify { .. } | Op::SetDocType { .. } | Op::Ocr { .. } | Op::Extract { .. } | Op::Validate {} => true,
         Op::Review { action, .. } => *action != ReviewOp::Show,
@@ -287,6 +287,9 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 format!("unknown document type '{dt}'; known: {}", known_types(ctx)),
             )),
         }
+    }
+    if f.doc_type.is_none() {
+        f.type_match = None;
     }
     for (path, value) in [("scope.filter.date_from", f.date_from.clone()), ("scope.filter.date_to", f.date_to.clone())]
     {

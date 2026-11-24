@@ -5,13 +5,14 @@
 //! The model is reached through [`ChatBackend`] (the engine manager in the
 //! app, a scripted backend in tests).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use super::locate::PageLocator;
 use super::search::{search, SearchDeps};
 use super::{
     repo, Answer, AnswerKind, AnswerLanguage, AnswerRequest, AnswerSentence, AnswerStyle, Citation, ConversationTurn,
@@ -626,8 +627,39 @@ fn citation_from_hit(index: u32, h: &SearchHit) -> Citation {
         heading_path: h.heading_path.clone(),
         clause: h.clause.clone(),
         score: h.score,
-        excerpt: excerpt(&h.text),
+        // A match beyond the passage's first page: the excerpt is the text around it — what stands on
+        // the page the source is shown with — not the passage's opening lines, pages earlier.
+        excerpt: if h.match_page.is_some_and(|p| p != h.page_start) && !h.highlights.is_empty() {
+            excerpt(&h.snippet)
+        } else {
+            excerpt(&h.text)
+        },
+        match_page: h.match_page,
     }
+}
+
+/// The pages of passages that no search found (evidence kept from the previous answer, the first
+/// passages of a document that is compared): where each begins.
+fn start_pages(deps: &AnswerDeps<'_>, hits: &mut [SearchHit]) -> Result<()> {
+    deps.search.db.with_read(|c| {
+        let mut locator = PageLocator::default();
+        for h in hits.iter_mut() {
+            h.match_page = locator.start(c, &h.document_id, h.page_start)?;
+        }
+        Ok(())
+    })
+}
+
+/// The pages of a summary's sources: where each passage begins — none for a document whose pages
+/// say nothing about where its text is.
+fn source_pages(deps: &AnswerDeps<'_>, sources: &mut [Citation]) -> Result<()> {
+    deps.search.db.with_read(|c| {
+        let mut locator = PageLocator::default();
+        for s in sources.iter_mut() {
+            s.match_page = locator.start(c, &s.document_id, s.page_start)?;
+        }
+        Ok(())
+    })
 }
 
 fn retrieval_query(req: &AnswerRequest) -> String {
@@ -688,8 +720,10 @@ pub fn retrieve(deps: &AnswerDeps<'_>, req: &AnswerRequest) -> Result<Vec<(Searc
                 score: 1.0,
                 channels: vec![SearchChannel::Morph],
                 vector_similarity: None,
+                match_page: Some(r.chunk.page_start),
             });
         }
+        start_pages(deps, &mut hits)?;
     }
     if !query.trim().is_empty() {
         let sreq = SearchRequest {
@@ -1437,6 +1471,8 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         nothing: None,
     };
     let mut out = summarize_rows(deps, req, &rows, &ask, reply, lang, on_delta)?;
+    cite_in_order(&mut out);
+    source_pages(deps, &mut out.sources)?;
     out.question = if req.question.trim().is_empty() { instruction } else { req.question.clone() };
     out.document_id = Some(doc_id);
     out.elapsed_ms = started.elapsed().as_millis() as u64;
@@ -1559,9 +1595,9 @@ pub fn summarize_documents(
     out.question = if req.question.trim().is_empty() { ask.whole.clone() } else { req.question.clone() };
     if let [only] = covered.as_slice() {
         out.document_id = Some(only.clone());
-    } else {
-        out.sources = cited_sources(&out.sentences, std::mem::take(&mut out.sources));
     }
+    cite_in_order(&mut out);
+    source_pages(deps, &mut out.sources)?;
     out.elapsed_ms = started.elapsed().as_millis() as u64;
     if req.save {
         // (what was summarised is the scope of the saved answer)
@@ -1572,27 +1608,92 @@ pub fn summarize_documents(
     Ok((out, without_text))
 }
 
-/// The sources a summary of several documents keeps: the passages its text cites. Every passage of
-/// every document was read, and a list of all of them — thousands for a library — would not say where
-/// a statement comes from (a citation keeps its number: the card looks a source up by `index`). A
-/// summary that cites nothing keeps the first passage of each document, so the documents it covers
-/// are still listed.
-fn cited_sources(sentences: &[AnswerSentence], sources: Vec<Citation>) -> Vec<Citation> {
-    let cited: std::collections::BTreeSet<u32> = sentences.iter().flat_map(|s| s.citations.iter().copied()).collect();
-    if cited.is_empty() {
-        let mut seen: Vec<String> = Vec::new();
-        return sources
-            .into_iter()
-            .filter(|c| {
-                let first = !seen.contains(&c.document_id);
-                if first {
-                    seen.push(c.document_id.clone());
-                }
-                first
-            })
-            .collect();
+/// The sources a summary of documents keeps, and the numbers they go by (1.0.5): the passages its
+/// text cites, numbered 1, 2, … in the order the text first cites them — the `[n]` markers of the
+/// text are rewritten to match. Every passage of every document was read, and a list of all of them
+/// — thousands for a library — would not say where a statement comes from. The summary of one
+/// document used to list every passage all the same, so that its `[n]` was the passage's place in
+/// the document and the card showed a long list of sources the text never names; the summary of
+/// several kept the cited ones under the numbers of that long list ("[3]", "[212]").
+///
+/// A summary that cites nothing keeps the first passage of each document, so the documents it
+/// covers are still listed. A marker above the number of passages read names no source and stays
+/// as the model wrote it (it is above the number of sources kept, too).
+fn cite_in_order(out: &mut Answer) {
+    let total = out.sources.len() as u32;
+    let mut order: Vec<u32> = Vec::new();
+    for line in out.text.lines() {
+        for n in citation_markers(line) {
+            if n <= total && !order.contains(&n) {
+                order.push(n);
+            }
+        }
     }
-    sources.into_iter().filter(|c| cited.contains(&c.index)).collect()
+    let sources = std::mem::take(&mut out.sources);
+    if order.is_empty() {
+        let mut seen: Vec<String> = Vec::new();
+        for mut c in sources {
+            if !seen.contains(&c.document_id) {
+                seen.push(c.document_id.clone());
+                c.index = seen.len() as u32;
+                out.sources.push(c);
+            }
+        }
+        return;
+    }
+    let number: HashMap<u32, u32> = order.iter().enumerate().map(|(i, n)| (*n, i as u32 + 1)).collect();
+    let mut by_index: HashMap<u32, Citation> = sources.into_iter().map(|c| (c.index, c)).collect();
+    for n in &order {
+        if let Some(mut c) = by_index.remove(n) {
+            c.index = number[n];
+            out.sources.push(c);
+        }
+    }
+    if order.iter().enumerate().any(|(i, n)| *n != i as u32 + 1) {
+        out.text = renumber_markers(&out.text, &number);
+    }
+    let (sentences, conflicts) = parse_answer(&out.text, out.sources.len() as u32);
+    out.sentences = sentences;
+    out.conflicts = conflicts;
+}
+
+/// `text` with the numbers of its citation markers replaced as `number` says ("[3][7]" → "[1][2]",
+/// "[출처 7, 3]" → "[출처 2, 1]"); a number it does not hold stays.
+fn renumber_markers(text: &str, number: &HashMap<u32, u32>) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            if let Some(close) = chars[i + 1..].iter().position(|c| *c == ']') {
+                let inner: String = chars[i + 1..i + 1 + close].iter().collect();
+                // (a marker stands on one line: the numbers are read line by line)
+                if !inner.contains('\n') && !citation_markers(&format!("[{inner}]")).is_empty() {
+                    out.push('[');
+                    let mut digits = String::new();
+                    for c in inner.chars().chain(std::iter::once(']')) {
+                        if c.is_ascii_digit() {
+                            digits.push(c);
+                            continue;
+                        }
+                        if !digits.is_empty() {
+                            match digits.parse::<u32>().ok().and_then(|n| number.get(&n)) {
+                                Some(new) => out.push_str(&new.to_string()),
+                                None => out.push_str(&digits),
+                            }
+                            digits.clear();
+                        }
+                        out.push(c);
+                    }
+                    i += close + 2;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// What the steps of a summary ask the model for.
@@ -1656,6 +1757,7 @@ fn summarize_rows_stepwise(
             clause: r.chunk.clause.clone(),
             score: 1.0,
             excerpt: excerpt(&r.chunk.text),
+            match_page: Some(r.chunk.page_start),
         })
         .collect();
     let texts: Vec<String> =
@@ -1938,6 +2040,12 @@ pub fn summarize_topic(
     let reply = reply_limit(deps, req, MAX_SUMMARY_TOKENS);
     let ask = topic_ask(&topic, req.summary_mode, lang, reply);
     let mut out = summarize_rows(deps, req, &rows, &ask, reply, lang, on_delta)?;
+    // The passages were found by the subject's words: each is shown on the page where they stand.
+    for s in &mut out.sources {
+        if let Some(h) = hits.iter().find(|h| h.chunk_id == s.chunk_id) {
+            s.match_page = h.match_page;
+        }
+    }
     out.question = topic.clone();
     // The passages matched the words and still say nothing about the subject.
     let phrase = if ko { "근거에 없음" } else { "not in the sources" };
@@ -1985,30 +2093,33 @@ pub fn compare(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn Fn
                 let ids: Vec<i64> = chunks.iter().take(per_side as usize).map(|ch| ch.id).collect();
                 repo::chunk_rows(c, &ids)
             })?;
+            let mut first: Vec<SearchHit> = Vec::new();
             for r in rows {
-                let text = super::index::indexed_text(r.chunk.heading_path.as_deref(), &r.chunk.text);
-                evidence.push((
-                    SearchHit {
-                        chunk_id: r.chunk.id,
-                        document_id: r.chunk.document_id.clone(),
-                        title: r.title,
-                        rel_path: r.rel_path,
-                        role: r.role,
-                        doc_type: r.doc_type,
-                        page_start: r.chunk.page_start,
-                        page_end: r.chunk.page_end,
-                        kind: r.chunk.kind,
-                        heading_path: r.chunk.heading_path.clone(),
-                        clause: r.chunk.clause.clone(),
-                        text: r.chunk.text.clone(),
-                        snippet: String::new(),
-                        highlights: Vec::new(),
-                        score: 1.0,
-                        channels: Vec::new(),
-                        vector_similarity: None,
-                    },
-                    text,
-                ));
+                first.push(SearchHit {
+                    chunk_id: r.chunk.id,
+                    document_id: r.chunk.document_id.clone(),
+                    title: r.title,
+                    rel_path: r.rel_path,
+                    role: r.role,
+                    doc_type: r.doc_type,
+                    page_start: r.chunk.page_start,
+                    page_end: r.chunk.page_end,
+                    kind: r.chunk.kind,
+                    heading_path: r.chunk.heading_path.clone(),
+                    clause: r.chunk.clause.clone(),
+                    text: r.chunk.text.clone(),
+                    snippet: String::new(),
+                    highlights: Vec::new(),
+                    score: 1.0,
+                    channels: Vec::new(),
+                    vector_similarity: None,
+                    match_page: Some(r.chunk.page_start),
+                });
+            }
+            start_pages(deps, &mut first)?;
+            for h in first {
+                let text = super::index::indexed_text(h.heading_path.as_deref(), &h.text);
+                evidence.push((h, text));
             }
         }
         for (h, t) in evidence {
@@ -2175,6 +2286,46 @@ mod tests {
         assert!(s[0].citations.is_empty());
         assert_eq!(s[1].citations, vec![2]);
         assert!(c.is_none());
+    }
+
+    /// 1.0.5: the sources a summary cites are numbered in the order its text first cites them.
+    #[test]
+    fn a_summary_keeps_the_sources_it_cites_in_the_order_it_cites_them() {
+        let source = |index: u32, doc: &str| Citation {
+            index,
+            chunk_id: 100 + index as i64,
+            document_id: doc.into(),
+            title: doc.into(),
+            page_start: index,
+            page_end: index,
+            heading_path: None,
+            clause: None,
+            score: 1.0,
+            excerpt: String::new(),
+            match_page: Some(index),
+        };
+        let sources: Vec<Citation> = (1..=8).map(|i| source(i, if i <= 4 { "a" } else { "b" })).collect();
+        let summary = |text: &str| {
+            let mut out = Answer { text: text.into(), sources: sources.clone(), ..Answer::default() };
+            cite_in_order(&mut out);
+            out
+        };
+        let a = summary("- 첫째 [7].\n- 둘째 [3, 7] 그리고 3.5% [12].\n\n상충: 값이 다릅니다 [출처 3][2].");
+        assert_eq!(a.text, "- 첫째 [1].\n- 둘째 [2, 1] 그리고 3.5% [12].\n\n상충: 값이 다릅니다 [출처 2][3].");
+        assert_eq!(
+            a.sources.iter().map(|c| (c.index, c.chunk_id)).collect::<Vec<_>>(),
+            vec![(1, 107), (2, 103), (3, 102)]
+        );
+        assert_eq!(a.sentences[1].citations, vec![2, 1]);
+        assert_eq!(a.conflicts.as_deref(), Some("값이 다릅니다 [출처 2][3]."));
+        // Numbers already in order stay; what is not a marker is not touched.
+        let a = summary("- 첫째 [1].\n- 둘째 [2] (표 [A] 참고) [3].");
+        assert_eq!(a.text, "- 첫째 [1].\n- 둘째 [2] (표 [A] 참고) [3].");
+        assert_eq!(a.sources.iter().map(|c| c.index).collect::<Vec<_>>(), vec![1, 2, 3]);
+        // Nothing cited: the first passage of each document, numbered from one.
+        let a = summary("- 출처를 달지 않은 요약 [40]");
+        assert_eq!(a.sources.iter().map(|c| (c.index, c.chunk_id)).collect::<Vec<_>>(), vec![(1, 101), (2, 105)]);
+        assert_eq!(a.text, "- 출처를 달지 않은 요약 [40]");
     }
 
     #[test]

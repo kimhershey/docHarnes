@@ -5,14 +5,15 @@ import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useAnswers, useKnowledgeStatus } from "@/lib/queries";
+import { sourceHref } from "@/lib/sourcePage";
 import type { Citation } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
 import { AnswerCard } from "./AnswerCard";
 
+/** Opens a source in the viewer: on the page it is shown with, its passage marked (`@/lib/sourcePage`). */
 export function openCitation(navigate: (to: string) => void, c: Citation): void {
-  const params = new URLSearchParams({ page: String(c.page_start), chunk: String(c.chunk_id) });
-  navigate(`/library/${c.document_id}?${params.toString()}`);
+  navigate(sourceHref(c));
 }
 
 export function AnswersPanel() {

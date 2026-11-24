@@ -23,7 +23,7 @@ import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { isJobFinished, type Answer, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type Answer, type AnswerRequest, type Job, type Op, type Plan, type PlanChoice, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -38,6 +38,7 @@ import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { planAnswerScope, sameSearchScope } from "./answerScope";
+import { choicesOf, chosenResponse, plannedTextOf } from "./choices";
 import { ClarifyCard } from "./ClarifyCard";
 import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor, unmetRequestNote } from "./describePlan";
@@ -425,6 +426,42 @@ export function AssistantPage() {
     setPlanningSession(null);
     // The card keeps the user's sentence as its text and the composed text as what the plan was made from.
     await handlePlan(sid, original, response, context, composed);
+  };
+
+  /**
+   * 1.0.5: a reading picked from the choices of a question. The plan is ready-made — nothing is planned again,
+   * so nothing is asked again: it is checked and previewed as it is (`planner_execute` with `preview_only`) and
+   * then handled exactly like a freshly planned plan (an answer is asked, a plan that needs no confirmation
+   * runs at once, any other shows its card). A reading that does not pass the check leaves the question open.
+   */
+  const chooseReading = async (sid: string, messageId: number, choice: PlanChoice) => {
+    const asked = messagesOf(sid).find((x): x is Extract<Message, { kind: "clarify" }> => x.id === messageId && x.role === "assistant" && x.kind === "clarify");
+    if (!asked || asked.status !== "pending" || busy || !live(sid)) return;
+    const settle = (status: ClarifyStatus, picked?: string) =>
+      patch(sid, messageId, (m) => {
+        if (m.role !== "assistant" || m.kind !== "clarify") return m;
+        const { picked: _dropped, ...rest } = m;
+        return picked ? { ...rest, status, picked } : { ...rest, status };
+      });
+    settle("answered", choice.key);
+    push(sid, { role: "user", text: choice.label });
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(messagesOf(sid)), routing: loadRouting() };
+    const plannedText = plannedTextOf(asked.text, asked.response);
+    setPlanningSession(sid);
+    let response: PlanResponse;
+    try {
+      const res = await api.plannerPreview(choice.plan, asked.text, context, plannedText ?? null);
+      if (!res.preview) throw new Error("planner_execute returned no preview");
+      response = chosenResponse(asked.response, res.preview);
+    } catch (e) {
+      setPlanningSession(null);
+      if (!live(sid)) return;
+      settle("pending");
+      push(sid, { role: "assistant", kind: "error", text: describeError(e, t) });
+      return;
+    }
+    setPlanningSession(null);
+    await handlePlan(sid, asked.text, response, context, plannedText);
   };
 
   /**
@@ -918,9 +955,13 @@ export function AssistantPage() {
                     noModel={m.response.result.source === "none" && m.response.result.issues.some((i) => i.code === "no_model")}
                     modelId={visionModel}
                     loading={loadingModel}
+                    choices={choicesOf(m.response)}
+                    picked={m.picked ?? null}
+                    choosing={busy}
                     onLoadModel={() => void loadModel()}
                     onRephrase={() => focusInput(m.text)}
                     onAskBack={(reply) => void askBack(sid, m.id, m.text, clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback"), reply)}
+                    onChoose={(choice) => void chooseReading(sid, m.id, choice)}
                     onCancel={() => cancelClarify(sid, m.id)}
                   />
                 )}

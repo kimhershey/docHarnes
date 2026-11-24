@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
+import { sourcePageLabel } from "@/lib/sourcePage";
 import type { Answer, AnswerSentence, AnswerTruncation, Citation, SavedAnswer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
@@ -12,8 +13,7 @@ import { useUiStore } from "@/stores/ui";
 type AnyAnswer = Answer | SavedAnswer;
 
 export function citationLabel(c: Citation, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const page = c.page_start === c.page_end ? t("answer.citation_page", { page: c.page_start }) : t("answer.citation_pages", { from: c.page_start, to: c.page_end });
-  return [c.title, page, c.clause ?? ""].filter(Boolean).join(" · ");
+  return [c.title, sourcePageLabel(c, t), c.clause ?? ""].filter(Boolean).join(" · ");
 }
 
 /**

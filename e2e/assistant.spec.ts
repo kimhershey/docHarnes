@@ -300,9 +300,11 @@ test.describe("assistant chat sessions", () => {
     await expect(evidence.last().locator(`[data-testid="evidence-hit"][data-doc-id="${guide}"]`)).toHaveCount(0);
   });
 
-  // KNO-5: a plan that is a single question dropped the scope it names — "회의록에서 …" searched every
-  // document, since only `scope.doc_ids` / `scope.folder` reached the knowledge request.
-  test("a question that names a document type finds evidence in the documents of that type only; a scope without documents says so", async ({ page }) => {
+  // KNO-5: a plan that is a single question dropped the scope it names, since only `scope.doc_ids` /
+  // `scope.folder` reached the knowledge request. 1.0.5 (user decision B): the type of a document is no scope
+  // condition of a question — "회의록에서 …" is looked up in every document, whatever each was classified as
+  // (until 1.0.4 it looked in the documents classified as 회의록 only); a period still narrows it.
+  test("a question that names a document type looks in every document; a scope without documents says so", async ({ page }) => {
     test.setTimeout(60_000);
     await freshApp(page);
     await createWorkspace(page);
@@ -323,17 +325,17 @@ test.describe("assistant chat sessions", () => {
     await expect(sources(everywhere)).toContainText("한빛_견적서.pdf");
     await expect(sources(everywhere)).toContainText("한빛_회의록.pdf");
 
-    // "회의록에서 …": the documents of that type only.
+    // "회의록에서 …": the type is no condition — a contract the classifier got wrong is still read.
     await send(page, "회의록에서 한빛 내용은?");
     const minutes = answerCards(page).nth(1);
     await expect(minutes).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
     await expect(minutes.getByTestId("answer-source").first()).toBeVisible();
     await expect(sources(minutes)).toContainText("한빛_회의록.pdf");
-    await expect(sources(minutes)).not.toContainText("한빛_견적서.pdf");
+    await expect(sources(minutes)).toContainText("한빛_견적서.pdf");
 
-    // A type no document has: "no evidence" for that scope — not a search over everything — and nothing to
-    // repeat with general knowledge.
-    await send(page, "검수확인서에서 한빛 내용은?");
+    // A period no document falls into: "no evidence" for that scope — not a search over everything — and
+    // nothing to repeat with general knowledge.
+    await send(page, "지난달 문서에서 한빛 내용은?");
     const none = answerCards(page).nth(2);
     await expect(none).toHaveAttribute("data-answer-state", "no_evidence", { timeout: 15_000 });
     await expect(none.getByTestId("answer-no-evidence")).toHaveText(ko.assistant.scope.no_documents);
@@ -346,7 +348,7 @@ test.describe("assistant chat sessions", () => {
     await openAssistantScreen(page);
     await expect(answerCards(page)).toHaveCount(3, { timeout: 15_000 });
     await expect(answerCards(page).nth(2).getByTestId("answer-no-evidence")).toHaveText(ko.assistant.scope.no_documents);
-    await expect(sources(answerCards(page).nth(1))).not.toContainText("한빛_견적서.pdf");
+    await expect(sources(answerCards(page).nth(1))).toContainText("한빛_견적서.pdf");
   });
 
   // KNO-3: a pasted text that does not fit was cut silently; the answer card says so now (`Answer.truncated`).

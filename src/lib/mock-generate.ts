@@ -623,7 +623,7 @@ export async function knowledgeCitations(query: string, excluded: string[]): Pro
   return res.hits
     .filter((h) => !excluded.includes(h.document_id))
     .slice(0, 3)
-    .map((h) => ({ doc_id: h.document_id, title: h.title, page: h.page_start, chunk_id: h.chunk_id, source: "knowledge", excerpt: h.snippet }));
+    .map((h) => ({ doc_id: h.document_id, title: h.title, page: h.match_page === undefined ? h.page_start : h.match_page, chunk_id: h.chunk_id, source: "knowledge", excerpt: h.snippet }));
 }
 
 function sentenceFor(section: string, content: string, ko: boolean, tone: DraftRequest["tone"], citation: DraftCitation | null): string {

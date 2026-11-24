@@ -233,6 +233,19 @@ pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanRes
     if !result.plan.is_clarification() {
         planner::validate::apply_default_scope(&mut result.plan, &ctx);
     }
+    // 1.0.5 (user decision C): a document type in the scope takes the documents classified as it
+    // and the ones that carry its name. When the two differ, the user says which are meant before
+    // anything is previewed — the question's choices are ready-made plans, executed as they are.
+    if !result.plan.is_clarification() && result.choices.is_empty() {
+        let ko = ctx.language == doculens_core::settings::Language::Ko;
+        let pctx = pipeline_bridge::context(app)?;
+        let asked = pctx.db().with_read(|c| planner::choices::type_overlap(c, &result.plan, &ctx, ko))?;
+        if let Some((question, readings)) = asked {
+            result.plan = planner::choices::question_plan(question, &result.plan);
+            result.choices = readings;
+            result.issues.retain(|i| i.blocking);
+        }
+    }
     let preview = if result.plan.is_clarification() {
         None
     } else {

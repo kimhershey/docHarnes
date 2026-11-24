@@ -129,7 +129,9 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
     s.push_str(&format!(
         "- {}: {} · {}: {} · {}: {}\n",
         tr(ko, "문서", "Documents"),
-        p.document_count,
+        // The work documents — the ones the table below lists and the check reads (`document_count` also
+        // counts the project's reference material).
+        p.document_count.saturating_sub(p.reference_count),
         tr(ko, "누락", "Missing"),
         p.missing_count,
         tr(ko, "최근 검사", "Last check"),

@@ -62,7 +62,8 @@ export type Message = { clipped?: Clipped } & (
   /** `uiResults`: what became of the execution's `ui_actions` once the UI ran them (one per action, in order). */
   | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string; uiResults?: UiOpResult[] }
   | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution; uiResults?: UiOpResult[] }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
+  /** `picked`: the key of the reading the user chose from `response.result.choices` (1.0.5). */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus; picked?: string }
   /** "근거만 찾기" (0.5.0): the hits of a knowledge search, no model call. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "evidence"; query: string; mode: SearchMode; response: SearchResponse | null; error: unknown; pending: boolean }
   | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string }

@@ -81,6 +81,10 @@ pub struct Expected {
     /// `true`: the plan must say what it leaves out (`unmet`); `false`: it must not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmet: Option<bool>,
+    /// 1.0.5: the readings the question must offer, by key and in order (`PlanResult.choices` —
+    /// `["project", "topic", "project_topic"]`); `[]`: it must offer none. Not checked when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
     /// Other plans that are just as right ("메일로 보내줘" may be answered with a question
     /// instead of a partial plan). The item is correct when this or any alternative matches.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -147,13 +151,15 @@ pub fn op_kinds(plan: &Plan) -> Vec<String> {
 
 /// Every way the produced plan differs from the expectation (empty = correct). With
 /// alternatives, the differences from the closest one.
-pub fn compare(expected: &Expected, plan: &Plan) -> Vec<Mismatch> {
-    let mut best = compare_one(expected, plan);
+///
+/// `choices`: the keys of the readings the result offers next to a question (1.0.5).
+pub fn compare(expected: &Expected, plan: &Plan, choices: &[String]) -> Vec<Mismatch> {
+    let mut best = compare_one(expected, plan, choices);
     for alt in &expected.alt {
         if best.is_empty() {
             break;
         }
-        let other = compare_one(alt, plan);
+        let other = compare_one(alt, plan, choices);
         if other.len() < best.len() {
             best = other;
         }
@@ -161,8 +167,17 @@ pub fn compare(expected: &Expected, plan: &Plan) -> Vec<Mismatch> {
     best
 }
 
-fn compare_one(expected: &Expected, plan: &Plan) -> Vec<Mismatch> {
+fn compare_one(expected: &Expected, plan: &Plan, choices: &[String]) -> Vec<Mismatch> {
     let mut out = Vec::new();
+    if let Some(wanted) = &expected.choices {
+        if wanted.as_slice() != choices {
+            out.push(Mismatch::Plan {
+                field: "choices".into(),
+                expected: serde_json::json!(wanted),
+                produced: serde_json::json!(choices),
+            });
+        }
+    }
     let produced_intent = plan.intent.as_str().to_string();
     if produced_intent != expected.intent {
         out.push(Mismatch::Intent { expected: expected.intent.clone(), produced: produced_intent });
@@ -349,17 +364,18 @@ mod tests {
             scope: Some(json!({ "filter": { "doc_type": "receipt" } })),
             confirm: None,
             unmet: None,
+            choices: None,
             alt: Vec::new(),
         };
-        assert!(compare(&ok, &plan).is_empty());
+        assert!(compare(&ok, &plan, &[]).is_empty());
 
         let wrong_params = Expected { params: vec![Some(json!({ "fn": "count" }))], ..ok.clone() };
-        let m = compare(&wrong_params, &plan);
+        let m = compare(&wrong_params, &plan, &[]);
         assert_eq!(m.len(), 1);
         assert!(matches!(&m[0], Mismatch::Params { index: 0, .. }));
 
         let wrong_scope = Expected { scope: Some(json!({ "doc_ids": ["d1"] })), ..ok.clone() };
-        assert!(matches!(compare(&wrong_scope, &plan).as_slice(), [Mismatch::Scope { .. }]));
+        assert!(matches!(compare(&wrong_scope, &plan, &[]).as_slice(), [Mismatch::Scope { .. }]));
 
         // Different ops: intent + ops reported, params skipped.
         let wrong_ops = Expected {
@@ -369,27 +385,36 @@ mod tests {
             scope: None,
             confirm: None,
             unmet: None,
+            choices: None,
             alt: Vec::new(),
         };
-        let m = compare(&wrong_ops, &plan);
+        let m = compare(&wrong_ops, &plan, &[]);
         assert_eq!(m.iter().map(Mismatch::kind).collect::<Vec<_>>(), vec!["intent", "ops"]);
         // … unless an alternative expectation matches.
         let either = Expected { alt: vec![ok.clone()], ..wrong_ops.clone() };
-        assert!(compare(&either, &plan).is_empty());
+        assert!(compare(&either, &plan, &[]).is_empty());
+
+        // 1.0.5: the readings a question offers, by key and in order.
+        let asks = Expected { choices: Some(vec!["type".into(), "topic".into()]), ..ok.clone() };
+        assert!(compare(&asks, &plan, &["type".to_string(), "topic".to_string()]).is_empty());
+        assert!(matches!(compare(&asks, &plan, &[]).as_slice(), [Mismatch::Plan { field, .. }] if field == "choices"));
+        let asks_nothing = Expected { choices: Some(Vec::new()), ..ok.clone() };
+        assert!(compare(&asks_nothing, &plan, &[]).is_empty());
+        assert_eq!(compare(&asks_nothing, &plan, &["type".to_string()]).len(), 1);
 
         // Plan-level expectations: confirmation and what the plan leaves out.
         let confirmed = Expected { confirm: Some(true), ..ok.clone() };
         assert!(
-            matches!(compare(&confirmed, &plan).as_slice(), [Mismatch::Plan { field, .. }] if field == "requires_confirmation")
+            matches!(compare(&confirmed, &plan, &[]).as_slice(), [Mismatch::Plan { field, .. }] if field == "requires_confirmation")
         );
         let names_the_gap = Expected { unmet: Some(true), confirm: Some(true), ..ok.clone() };
-        assert_eq!(compare(&names_the_gap, &plan).len(), 2);
+        assert_eq!(compare(&names_the_gap, &plan, &[]).len(), 2);
         let mut partial = plan.clone();
         partial.unmet = Some("메일로 보내기".into());
         partial.requires_confirmation = true;
-        assert!(compare(&names_the_gap, &partial).is_empty());
+        assert!(compare(&names_the_gap, &partial, &[]).is_empty());
         assert!(matches!(
-            compare(&Expected { unmet: Some(false), ..ok.clone() }, &partial).as_slice(),
+            compare(&Expected { unmet: Some(false), ..ok.clone() }, &partial, &[]).as_slice(),
             [Mismatch::Plan { field, .. }] if field == "unmet"
         ));
 
@@ -400,7 +425,7 @@ mod tests {
             group_by: Some(GroupBy::Month),
             include_unreviewed: None,
         };
-        assert!(matches!(compare(&ok, &plan).as_slice(), [Mismatch::Params { .. }]));
+        assert!(matches!(compare(&ok, &plan, &[]).as_slice(), [Mismatch::Params { .. }]));
     }
 
     #[test]
