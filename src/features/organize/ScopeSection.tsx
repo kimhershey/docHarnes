@@ -51,7 +51,8 @@ export function ScopeSection({ value, onChange, selectedCount, testId }: { value
             ))}
             {(projects ?? []).map((p) => (
               <SelectItem key={p.id} value={`${PROJECT_PREFIX}${p.id}`} data-testid={`${testId}-project-${p.id}`}>
-                {t("organize.scope.project", { name: p.name })} ({p.document_count})
+                {/* The scope of an organise run is the project's work documents (`scope::resolve`); `document_count` also counts its reference material (1.0.5). */}
+                {t("organize.scope.project", { name: p.name })} ({p.document_count - (p.reference_count ?? 0)})
               </SelectItem>
             ))}
           </SelectContent>

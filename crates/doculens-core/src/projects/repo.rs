@@ -3,8 +3,8 @@
 //! them inside `db.with(...)` / `db.with_tx(...)`; expected failures surface as
 //! `rusqlite::Error::InvalidParameterName(code)` (typed UI errors), the same
 //! convention as `pipeline::repo`. Counters shown on the board
-//! (`document_count`, `missing_count`, `last_*`) are computed from the
-//! membership / run tables, never stored.
+//! (`document_count`, `reference_count`, `missing_count`, `last_*`) are computed
+//! from the membership / reference-group / run tables, never stored.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -665,6 +665,7 @@ fn row_to_project(r: &Row<'_>) -> rusqlite::Result<Project> {
         created_at,
         updated_at: parse_ts(r.get(11)?).unwrap_or_else(Utc::now),
         document_count: 0,
+        reference_count: 0,
         missing_count: 0,
         last_check_at: parse_ts(r.get(12)?),
         last_pass: 0,
@@ -673,7 +674,8 @@ fn row_to_project(r: &Row<'_>) -> rusqlite::Result<Project> {
     })
 }
 
-/// Document types present per project (existing, non-deleted documents only).
+/// Document types present per project (existing, non-deleted documents only) — one entry per work document;
+/// reference material is not part of the checklist.
 fn types_by_project(conn: &Connection, project_id: Option<&str>) -> rusqlite::Result<BTreeMap<String, Vec<String>>> {
     let mut sql = String::from(
         "SELECT pd.project_id, d.doc_type FROM project_documents pd JOIN documents d ON d.id = pd.document_id \
@@ -695,12 +697,35 @@ fn types_by_project(conn: &Connection, project_id: Option<&str>) -> rusqlite::Re
     Ok(out)
 }
 
+/// How many documents each project holds as reference material only: existing, non-deleted documents of the
+/// project's reference group that are not among its work documents (a document on both sides is a work
+/// document here, so the two counts add up to the documents the project holds, each once).
+fn reference_only_by_project(conn: &Connection, project_id: Option<&str>) -> rusqlite::Result<BTreeMap<String, u32>> {
+    let mut sql = String::from(
+        "SELECT c.project_id, COUNT(DISTINCT cd.document_id) FROM collection_docs cd \
+         JOIN collections c ON c.id = cd.collection_id JOIN documents d ON d.id = cd.document_id \
+         WHERE c.project_id IS NOT NULL AND d.deleted_at IS NULL AND NOT EXISTS (\
+           SELECT 1 FROM project_documents pd WHERE pd.project_id = c.project_id AND pd.document_id = cd.document_id)",
+    );
+    if project_id.is_some() {
+        sql.push_str(" AND c.project_id = ?1");
+    }
+    sql.push_str(" GROUP BY c.project_id");
+    let mut st = conn.prepare(&sql)?;
+    let map = |r: &Row<'_>| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32));
+    match project_id {
+        Some(id) => st.query_map([id], map)?.collect(),
+        None => st.query_map([], map)?.collect(),
+    }
+}
+
 /// Fills the computed counters of the given projects.
 fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>) -> rusqlite::Result<()> {
     if projects.is_empty() {
         return Ok(());
     }
     let types = types_by_project(conn, only)?;
+    let reference_only = reference_only_by_project(conn, only)?;
     let template_ids: BTreeSet<String> = projects.iter().filter_map(|p| p.template_id.clone()).collect();
     let mut required: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for id in template_ids {
@@ -734,7 +759,10 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
     let today = chrono::Local::now().date_naive();
     for p in projects.iter_mut() {
         let present = types.get(&p.id).cloned().unwrap_or_default();
-        p.document_count = present.len() as u32;
+        // The count the board shows is everything the project holds — work documents and reference material;
+        // the checklist below reads the work documents only.
+        p.reference_count = reference_only.get(&p.id).copied().unwrap_or(0);
+        p.document_count = present.len() as u32 + p.reference_count;
         p.missing_count = p
             .template_id
             .as_ref()

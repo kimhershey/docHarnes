@@ -4750,7 +4750,9 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         const project = mp.resolveProjectRef(op.project, ctx.current_project);
         const detailOf = project ? (mp.projectDetail(project.id) ?? null) : null;
         const n = (op.rules ?? []).length > 0 ? (op.rules ?? []).length : (detailOf?.rules.filter((r) => r.enabled).length ?? 0);
-        summary = project ? (ko ? `${project.name} · 규칙 ${n}개 · 문서 ${project.document_count}건` : `${project.name} · ${n} rules · ${project.document_count} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        // The check reads the work documents (`document_count` also counts the project's reference material).
+        const work = project ? project.document_count - (project.reference_count ?? 0) : 0;
+        summary = project ? (ko ? `${project.name} · 규칙 ${n}개 · 문서 ${work}건` : `${project.name} · ${n} rules · ${work} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
         payload = { project_id: project?.id ?? null, rules: n };
         break;
       }

@@ -208,8 +208,14 @@ pub struct Project {
     pub keywords: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Documents the project holds: its work documents (업무 문서) and the documents of its reference group
+    /// (참고 자료), each document once (1.0.5 — a project that only held reference material said "문서 0건").
     pub document_count: u32,
-    /// Required document types still missing (from the template checklist).
+    /// The part of `document_count` the project holds as reference material only (in its reference group and
+    /// not among its work documents); `document_count - reference_count` = the work documents.
+    #[serde(default)]
+    pub reference_count: u32,
+    /// Required document types still missing (from the template checklist; work documents only).
     pub missing_count: u32,
     pub last_check_at: Option<DateTime<Utc>>,
     /// Verdict counts of the last check run.

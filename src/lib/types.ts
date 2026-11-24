@@ -2612,7 +2612,10 @@ export interface Project {
   keywords: string[];
   created_at: string;
   updated_at: string;
+  /** Documents the project holds: 업무 문서 + 참고 자료, each document once (1.0.5; work documents only before). */
   document_count: number;
+  /** The part of `document_count` held as 참고 자료 only; absent in a project stored before 1.0.5 (a chat card). */
+  reference_count?: number;
   missing_count: number;
   last_check_at: string | null;
   last_pass: number;

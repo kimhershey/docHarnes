@@ -4,7 +4,7 @@
 // takes `as_reference`.
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { defaultImportOptions, type Answer, type Collection, type DocumentView, type ImportOptions, type KnowledgeStatus, type SearchResponse, type SearchScope } from "@/lib/types";
+import { defaultImportOptions, type Answer, type Collection, type DocumentView, type ImportOptions, type KnowledgeStatus, type PlanContext, type Project, type SearchResponse, type SearchScope } from "@/lib/types";
 
 const store = new Map<string, string>();
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
@@ -159,5 +159,62 @@ describe("mock reference material (0.5.0)", () => {
     const exec2 = await pl.runPlan(plain!, ctx2, null, () => undefined);
     expect(exec2.steps[0]?.payload).toMatchObject({ project_id: p.id, added: 1, as_reference: false });
     expect((await backend.mockInvoke<{ documents: unknown[] }>("project_get", { id: p.id })).documents).toHaveLength(1);
+  });
+
+  // 1.0.5 (user report "프로젝트에 문서를 추가한 뒤에도 프로젝트 문서가 0개로 표시"): the count on the cards is what the
+  // project holds — work documents + reference material, each once — as `repo::fill_counters` counts it.
+  it("counts: a project's document_count includes its reference material; reference_count is the reference-only part", async () => {
+    const ids = await importDocs(["지침.pdf", "계약서.pdf", "제안서.pdf", "회의록.pdf"]);
+    const [d1, d2, d3, d4] = [ids["지침.pdf"]!, ids["계약서.pdf"]!, ids["제안서.pdf"]!, ids["회의록.pdf"]!];
+    const a = await backend.mockInvoke<Project>("project_create", { input: { name: "AAA" } });
+    const b = await backend.mockInvoke<Project>("project_create", { input: { name: "BBB" } });
+    /** `[document_count, reference_count]` of the list's card, checked against the project read alone. */
+    const counts = async (id: string): Promise<[number, number | undefined]> => {
+      const listed = (await backend.mockInvoke<Project[]>("projects_list")).find((p) => p.id === id)!;
+      const one = (await backend.mockInvoke<{ project: Project }>("project_get", { id })).project;
+      expect([one.document_count, one.reference_count]).toEqual([listed.document_count, listed.reference_count]);
+      return [listed.document_count, listed.reference_count];
+    };
+    const assign = (add: { doc_id: string; project_id: string; reference: boolean }[]) => backend.mockInvoke<{ moved: number; undo: unknown }>("project_assign", { req: { remove: [], add } });
+    expect([await counts(a.id), await counts(b.id)]).toEqual([[0, 0], [0, 0]]);
+
+    // Reference material only: it counts (the card said "문서 0건").
+    await backend.mockInvoke("project_add_documents", { id: a.id, docIds: [d1], asReference: true });
+    expect((await backend.mockInvoke<{ documents: unknown[] }>("project_get", { id: a.id })).documents).toHaveLength(0);
+    expect(await counts(a.id)).toEqual([1, 1]);
+    expect(await counts(b.id)).toEqual([0, 0]);
+
+    // Work documents next to it.
+    await backend.mockInvoke("project_add_documents", { id: a.id, docIds: [d2, d3] });
+    expect(await counts(a.id)).toEqual([3, 1]);
+
+    // A work document that is in the reference group as well counts once — as a work document.
+    const group = await backend.mockInvoke<Collection>("project_reference_group", { id: a.id });
+    await backend.mockInvoke("knowledge_collection_add", { args: { id: group.id, doc_ids: [d2], set_role: false } });
+    expect((await backend.mockInvoke<DocumentView[]>("knowledge_collection_docs", { id: group.id })).map((d) => d.id).sort()).toEqual([d1, d2].sort());
+    expect(await counts(a.id)).toEqual([3, 1]);
+
+    // Moving a work document to reference material keeps the total, and so does moving it back.
+    const moved = await assign([{ doc_id: d3, project_id: a.id, reference: true }]);
+    expect(moved.moved).toBe(1);
+    expect(await counts(a.id)).toEqual([3, 2]);
+    await backend.mockInvoke("project_assign", { req: moved.undo });
+    expect(await counts(a.id)).toEqual([3, 1]);
+
+    // The same document as reference material of two projects counts in each.
+    await assign([{ doc_id: d1, project_id: b.id, reference: true }, { doc_id: d4, project_id: b.id, reference: false }]);
+    expect([await counts(a.id), await counts(b.id)]).toEqual([[3, 1], [2, 1]]);
+
+    // The assistant's cards: deleting a project says how many documents it holds; a check reads the work documents.
+    const ctx: PlanContext = pl.buildContext({ current_project: a.id });
+    const scope = { doc_ids: [], folder: null, filter: {} };
+    const preview = (operations: unknown[]) => pl.planPreview({ intent: "command", scope, operations, requires_confirmation: false, summary: "" } as unknown as Parameters<typeof pl.planPreview>[0], ctx);
+    expect(preview([{ op: "delete_project", project: a.id }]).steps[0]).toMatchObject({ payload: { documents: 3 } });
+    expect(preview([{ op: "delete_project", project: a.id }]).steps[0]?.summary).toContain("문서 3건");
+    expect(preview([{ op: "check_consistency", project: a.id, rules: [] }]).steps[0]?.summary).toContain("문서 2건");
+
+    // A deleted document is not counted on either side.
+    await backend.mockInvoke("documents_delete", { ids: [d1] });
+    expect([await counts(a.id), await counts(b.id)]).toEqual([[2, 0], [1, 0]]);
   });
 });

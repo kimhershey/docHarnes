@@ -2348,3 +2348,104 @@ fn the_undo_of_an_assignment_restores_the_role_a_document_had() {
     let none = w.assign(&assign::AssignRequest::default());
     assert!(none.undo.is_empty() && none.projects.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// 1.0.5: the document count of a project = work documents + reference material
+// ---------------------------------------------------------------------------
+
+/// `(document_count, reference_count)` of a project, from the single read and from the board's list.
+fn counts(db: &Db, project_id: &str) -> (u32, u32) {
+    let one = db.with(|c| repo::get_project(c, project_id)).unwrap().unwrap();
+    let listed = db.with(repo::list_projects).unwrap().into_iter().find(|p| p.id == project_id).unwrap();
+    assert_eq!(
+        (one.document_count, one.reference_count),
+        (listed.document_count, listed.reference_count),
+        "the card of the list and the project read alone agree"
+    );
+    (one.document_count, one.reference_count)
+}
+
+#[test]
+fn the_document_count_of_a_project_includes_its_reference_material() {
+    use crate::knowledge::repo as knowledge_repo;
+    let w = CopyWorld::new();
+    for (id, name) in [("d1", "규정"), ("d2", "계약서"), ("d3", "제안서"), ("d4", "회의록")] {
+        w.doc(id, &format!("documents/{name}.pdf"), name.as_bytes(), "contract");
+    }
+    let (a, b) = (w.project("AAA", None), w.project("BBB", None));
+    assert_eq!((counts(&w.db, &a.id), counts(&w.db, &b.id)), ((0, 0), (0, 0)));
+
+    // Reference material only (the report: "문서를 추가한 뒤에도 프로젝트 문서가 0개") — it counts.
+    w.assign(&assign::AssignRequest { add: vec![place("d1", &a.id, true)], ..Default::default() });
+    assert_eq!(w.members(&a.id), (ids(&[]), ids(&["d1"])));
+    assert_eq!(counts(&w.db, &a.id), (1, 1));
+    assert_eq!(counts(&w.db, &b.id), (0, 0), "another project's reference group is not counted");
+
+    // Work documents next to it: the total is both, the reference part stays.
+    assert_eq!(w.add(&a.id, &["d2", "d3"]), 2);
+    assert_eq!(counts(&w.db, &a.id), (3, 1));
+
+    // A document that is a work document and in the reference group counts once — as a work document.
+    w.db.with(|c| {
+        let group = knowledge_repo::project_reference_group(c, &a.id, "AAA")?;
+        knowledge_repo::add_docs_to_collection(c, &group.id, &["d2".to_string()])
+    })
+    .unwrap();
+    assert_eq!(w.members(&a.id), (ids(&["d2", "d3"]), ids(&["d1", "d2"])));
+    assert_eq!(counts(&w.db, &a.id), (3, 1));
+
+    // Moving a work document to reference material keeps the total (it used to lower it).
+    let out = w.assign(&assign::AssignRequest { add: vec![place("d3", &a.id, true)], ..Default::default() });
+    assert_eq!(out.moved, 1, "{out:?}");
+    assert_eq!(w.members(&a.id), (ids(&["d2"]), ids(&["d1", "d2", "d3"])));
+    assert_eq!(counts(&w.db, &a.id), (3, 2));
+    // …and so does moving it back.
+    w.assign(&out.undo);
+    assert_eq!(counts(&w.db, &a.id), (3, 1));
+
+    // The same document as reference material of two projects counts in each.
+    w.assign(&assign::AssignRequest {
+        add: vec![place("d1", &b.id, true), place("d4", &b.id, false)],
+        ..Default::default()
+    });
+    assert_eq!((counts(&w.db, &a.id), counts(&w.db, &b.id)), ((3, 1), (2, 1)));
+
+    // A deleted document is not counted on either side.
+    w.db.with(|c| docs::delete_document(c, "d1")).unwrap();
+    assert_eq!((counts(&w.db, &a.id), counts(&w.db, &b.id)), ((2, 0), (1, 0)));
+    w.db.with(|c| docs::delete_document(c, "d3")).unwrap();
+    assert_eq!(counts(&w.db, &a.id), (1, 0));
+
+    // A project stored before 1.0.5 (a chat card's payload) has no `reference_count`.
+    let mut stored = serde_json::to_value(w.db.with(|c| repo::get_project(c, &b.id)).unwrap().unwrap()).unwrap();
+    stored.as_object_mut().unwrap().remove("reference_count");
+    assert_eq!(serde_json::from_value::<Project>(stored).unwrap().reference_count, 0);
+}
+
+#[test]
+fn reference_material_is_counted_but_is_not_part_of_the_checklist_or_the_report() {
+    use crate::knowledge::repo as knowledge_repo;
+    let db = db();
+    seed_br(&db, "br1", "123-45-67890", "한빛상사");
+    seed_invoice(&db, "ti1", "123-45-67890", "한빛상사", "1,000,000", "1,100,000", false);
+    let p = project(&db, "거래처 A", Some("tpl_certification_audit"));
+    // The business registration is held as reference material only: counted, but still a missing required type.
+    db.with(|c| {
+        let group = knowledge_repo::project_reference_group(c, &p.id, &p.name)?;
+        knowledge_repo::add_docs_to_collection(c, &group.id, &["br1".to_string()])
+    })
+    .unwrap();
+    let held = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((held.document_count, held.reference_count, held.missing_count), (1, 1, 3));
+    assert_eq!(add(&db, &p.id, &["ti1"]), 1);
+    let held = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((held.document_count, held.reference_count, held.missing_count), (2, 1, 3));
+    let list = db.with(|c| repo::checklist(c, &p.id, Language::Ko)).unwrap();
+    assert!(list.iter().find(|c| c.doc_type == "business_registration").unwrap().missing);
+
+    // The report lists the work documents, and its header counts those.
+    let d = detail(&db, &p.id, Language::Ko).unwrap();
+    assert_eq!(d.documents.len(), 1);
+    let md = report::render(&d, Language::Ko);
+    assert!(md.contains("- 문서: 1 · 누락: 3"), "{md}");
+}
