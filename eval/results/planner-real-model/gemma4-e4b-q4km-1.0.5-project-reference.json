@@ -1,0 +1,694 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-24T04:45:59Z",
+  "golden": "eval/results/planner-real-model/project-reference-1.0.5.golden.json",
+  "golden_count": 8,
+  "context": "eval/results/planner-real-model/topic-summary-1.0.2-open-document.context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "engine/bin/llama-server",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 9250
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 8,
+  "correct": 8,
+  "accuracy": 1.0,
+  "by_category": {
+    "ko": {
+      "total": 8,
+      "correct": 8,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "answer": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "summarize": {
+      "total": 7,
+      "correct": 7,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 8,
+      "correct": 8,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 8
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 29292.308973,
+    "p95_ms": 143313.686547,
+    "mean_ms": 69310.00008525001
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 29292.308973,
+      "p95_ms": 143313.686547,
+      "mean_ms": 69310.00008525001
+    }
+  },
+  "items": [
+    {
+      "id": "p-1",
+      "category": "ko",
+      "text": "AAA 프로젝트의 참고자료 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료를 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 143313.686547,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4025,
+      "completion_tokens": 147,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료를 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"knowledge\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-2",
+      "category": "ko",
+      "text": "AAA 프로젝트 참고자료만 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료만 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 135670.550523,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4672,
+      "completion_tokens": 136,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료만 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-3",
+      "category": "ko",
+      "text": "AAA 프로젝트의 참고자료에서 요구사항 정의서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료에 있는 요구사항 정의서들을 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 135581.87286,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4091,
+      "completion_tokens": 195,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "srs",
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료에 있는 요구사항 정의서들을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": [],\n    \"filter\": {\n      \"doc_type\": \"srs\",\n      \"tags\": [\"knowledge\"]\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"manage_reference\",\n      \"action\": \"add\",\n      \"project\": \"AAA\"\n    },\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-4",
+      "category": "ko",
+      "text": "AAA 프로젝트 참고자료에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료에 대해 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 35167.512688,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4027,
+      "completion_tokens": 137,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료에 대해 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-5",
+      "category": "ko",
+      "text": "AAA 참고자료 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료 내용을 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 25865.725569,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4021,
+      "completion_tokens": 158,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"knowledge\",\n      \"status\": \"reviewed\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-6",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 참고 자료를 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "한빛 납품 프로젝트의 참고 자료를 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 25288.553841999998,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4031,
+      "completion_tokens": 153,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-hanbit",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"한빛 납품 프로젝트의 참고 자료를 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"knowledge\",\n      \"tags\": [\"한빛 납품\"]\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-7",
+      "category": "ko",
+      "text": "AAA 프로젝트의 참고자료에서 보안 요구사항 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료에서 보안 요구사항을 질의응답합니다.",
+      "confidence": 0.9,
+      "latency_ms": 29292.308973,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4029,
+      "completion_tokens": 183,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "AAA 프로젝트의 참고 자료에서 보안 요구사항은 무엇인가요?"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료에서 보안 요구사항을 질의응답합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": [],\n    \"filter\": {\n      \"doc_type\": \"knowledge\",\n      \"tags\": [\"AAA\"]\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"AAA 프로젝트의 참고 자료에서 보안 요구사항은 무엇인가요?\",\n      \"cite\": true,\n      \"knowledge\": false\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "p-8",
+      "category": "ko",
+      "text": "AAA프로젝트 참고자료 요약",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트의 참고 자료 내용을 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 24299.78968,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_ignored",
+        "scope_filled",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4021,
+      "completion_tokens": 148,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "role": "knowledge"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 참고 자료 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"knowledge\",\n      \"tags\": [\"AAA\"]\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 8,
+    "correct": 8,
+    "accuracy": 1.0,
+    "by_category": {
+      "ko": {
+        "total": 8,
+        "correct": 8,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "answer": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      },
+      "summarize": {
+        "total": 7,
+        "correct": 7,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 8,
+        "correct": 8,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 8
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "p-1",
+        "category": "ko",
+        "text": "AAA 프로젝트의 참고자료 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 9.919177,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-2",
+        "category": "ko",
+        "text": "AAA 프로젝트 참고자료만 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 4.225638,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-3",
+        "category": "ko",
+        "text": "AAA 프로젝트의 참고자료에서 요구사항 정의서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "요구사항 정의서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 5.192899,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "srs",
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-4",
+        "category": "ko",
+        "text": "AAA 프로젝트 참고자료에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 4.484651,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-5",
+        "category": "ko",
+        "text": "AAA 참고자료 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 3.9314579999999997,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-6",
+        "category": "ko",
+        "text": "한빛 납품 프로젝트의 참고 자료를 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 4.43855,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-7",
+        "category": "ko",
+        "text": "AAA 프로젝트의 참고자료에서 보안 요구사항 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 2.091749,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled",
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "AAA 프로젝트의 참고자료에서 보안 요구사항 알려줘"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      },
+      {
+        "id": "p-8",
+        "category": "ko",
+        "text": "AAA프로젝트 참고자료 요약",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 4.56987,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge"
+          }
+        }
+      }
+    ]
+  }
+}

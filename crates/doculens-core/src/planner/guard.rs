@@ -1799,6 +1799,29 @@ pub fn tell_is_answer(text: &str, plan: &mut Plan, ko: bool) -> bool {
     true
 }
 
+/// 1.0.5 — "'위약금' 들어간 계약서 찾아줘" came back from Gemma 4 E4B as `open` (document, ref "위약금")
+/// with the card saying "… 검색합니다" (eval run of 2026-11-24): a document of that name is looked for
+/// and not found. A sentence that asks to find something and does not ask to open it is a search for
+/// what the plan named — and, as for every search, a document type is no condition of it.
+pub fn find_is_search(text: &str, plan: &mut Plan, ko: bool) -> bool {
+    const FINDS: &[&str] = &["찾아", "찾기", "검색", "find", "search*", "look for", "locate"];
+    const OPENS: &[&str] = &["열어", "열기", "열람", "보여", "띄워", "open", "show"];
+    let [Op::Open { target: super::OpenTarget::Document, reference }] = plan.operations.as_slice() else {
+        return false;
+    };
+    let said = super::rules::user_words(text);
+    if !super::rules::says(&said, FINDS) || super::rules::says(&said, OPENS) {
+        return false;
+    }
+    let query = if reference.trim().is_empty() { said.trim().to_string() } else { reference.trim().to_string() };
+    plan.operations = vec![Op::Search { query, mode: None, top_k: None, group_by: None }];
+    plan.intent = OpKind::Search;
+    plan.scope.filter.doc_type = None;
+    plan.scope.filter.type_match = None;
+    plan.summary = Some(if ko { "문서에서 찾습니다" } else { "Searches the documents" }.to_string());
+    true
+}
+
 /// What a sentence that points at "this document" is told when none is open or selected.
 pub fn nothing_at_hand(ko: bool) -> &'static str {
     if ko {

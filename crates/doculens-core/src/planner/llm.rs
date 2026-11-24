@@ -367,6 +367,10 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 guard::explain_what_was_said(text, &mut plan);
                 // "AA에 대해서 요약해줘": the subject the sentence names is what the summary is about.
                 issues.extend(guard::summary_about(text, &mut plan, ctx, ko));
+                // "… 찾아줘" asks for a search: opening a document of that name is not one (1.0.5).
+                if guard::find_is_search(text, &mut plan, ko) {
+                    log::info!("planner: an open for a sentence that asks to find; searching the documents");
+                }
                 // "… 알려줘" asks for an answer: a list of hits is not one (1.0.5).
                 if guard::tell_is_answer(text, &mut plan, ko) {
                     log::info!("planner: a search for a sentence that asks to be told; answering from the documents");

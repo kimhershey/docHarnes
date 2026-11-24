@@ -1,0 +1,889 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-24T05:04:02Z",
+  "golden": "eval/golden/planner.json",
+  "golden_count": 11,
+  "context": "eval/golden/planner-context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "engine/bin/llama-server",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 6350
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 11,
+  "correct": 11,
+  "accuracy": 1.0,
+  "by_category": {
+    "ko": {
+      "total": 11,
+      "correct": 10,
+      "accuracy": 0.9090909090909091
+    }
+  },
+  "by_intent": {
+    "answer": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    },
+    "clarify": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "search": {
+      "total": 1,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "summarize": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 11,
+      "correct": 10,
+      "accuracy": 0.9090909090909091
+    }
+  },
+  "by_source": {
+    "model": 11
+  },
+  "by_cause": {
+    "wrong_ops": 1
+  },
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 108587.92103700001,
+    "p95_ms": 133891.40893499998,
+    "mean_ms": 97762.28199454545
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 108587.92103700001,
+      "p95_ms": 133891.40893499998,
+      "mean_ms": 97762.28199454545
+    }
+  },
+  "items": [
+    {
+      "id": "ko-31",
+      "category": "ko",
+      "text": "'위약금' 들어간 계약서 찾아줘",
+      "correct": true,
+      "source": "model",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "문서에서 찾습니다",
+      "confidence": 0.9,
+      "latency_ms": 130889.80386,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3760,
+      "completion_tokens": 151,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "위약금"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"문서 내용에 '위약금'이 포함된 계약서를 검색합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"open\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"dev_contract\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"open\",\n      \"target\": \"document\",\n      \"ref\": \"위약금\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}",
+      "first_measurement": {
+        "ops": [
+          "open"
+        ],
+        "operations": [
+          {
+            "op": "open",
+            "ref": "위약금",
+            "target": "document"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "dev_contract"
+          }
+        },
+        "summary": "문서 내용에 '위약금'이 포함된 계약서를 검색합니다.",
+        "correct": false,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "search",
+            "produced": "open"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "search"
+            ],
+            "produced": [
+              "open"
+            ]
+          }
+        ],
+        "latency_ms": 128625.161599
+      }
+    },
+    {
+      "id": "ko-140",
+      "category": "ko",
+      "text": "견적서에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "견적서의 내용을 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 114326.570785,
+      "kind": "question",
+      "requires_confirmation": false,
+      "choices": [
+        "type",
+        "topic"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3814,
+      "completion_tokens": 135,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "'견적서'는 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"견적서의 내용을 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"estimate\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"견적서\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-142",
+      "category": "ko",
+      "text": "한빛 납품에 대해서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "'한빛 납품'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 34915.007324,
+      "kind": "question",
+      "requires_confirmation": false,
+      "choices": [
+        "project",
+        "topic",
+        "project_topic"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3732,
+      "completion_tokens": 142,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "'한빛 납품' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"프로젝트 '한빛 납품'에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"한빛 납품\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-154",
+      "category": "ko",
+      "text": "납품 기한 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "문서에서 찾아 답합니다",
+      "confidence": 0.9,
+      "latency_ms": 19207.956275,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3724,
+      "completion_tokens": 117,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "answer",
+          "question": "납품 기한 알려줘"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"문서 내에서 납품 기한에 대한 정보를 검색합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"search\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"search\",\n      \"query\": \"납품 기한\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-155",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 검수 기준에 대해 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'한빛 납품' 프로젝트에서 '검수 기준'에 관한 내용을 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 133891.40893499998,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "summary_topic",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4722,
+      "completion_tokens": 149,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "topic": "검수 기준"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-hanbit",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"한빛 납품 프로젝트의 검수 기준에 대해 문서 기반으로 답변합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"한빛 납품 프로젝트의 검수 기준은 무엇인가요?\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-156",
+      "category": "ko",
+      "text": "이 문서에서 지체상금에 대해 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "열린 문서에서 '지체상금'에 관한 내용을 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 98772.94711400001,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "summary_topic"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3734,
+      "completion_tokens": 150,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "topic": "지체상금"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서에서 지체상금에 대한 정보를 질의응답합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"이 문서에서 지체상금에 대해 알려줘\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-157",
+      "category": "ko",
+      "text": "검수 기준에 대해 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "검수 기준에 대해 질문합니다.",
+      "confidence": 0.9,
+      "latency_ms": 109633.017977,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 4063,
+      "completion_tokens": 139,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "knowledge": true,
+          "mode": "general",
+          "op": "answer",
+          "question": "검수 기준에 대해 알려줘"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"검수 기준에 대해 질문합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"검수 기준에 대해 알려줘\",\n      \"cite\": true,\n      \"knowledge\": true,\n      \"mode\": \"general\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-158",
+      "category": "ko",
+      "text": "계약서에서 해지 조건 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "선택된 계약서에서 해지 조건을 찾아 답변합니다.",
+      "confidence": 0.9,
+      "latency_ms": 99493.874038,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3730,
+      "completion_tokens": 145,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "계약서에서 해지 조건은 무엇인가요?"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 계약서에서 해지 조건을 찾아 답변합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"계약서에서 해지 조건은 무엇인가요?\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-159",
+      "category": "ko",
+      "text": "한빛 납품에 대해 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "한빛 납품 프로젝트에 대한 정보를 제공합니다.",
+      "confidence": 0.9,
+      "latency_ms": 130912.083315,
+      "kind": "question",
+      "requires_confirmation": false,
+      "choices": [
+        "project",
+        "topic",
+        "project_topic"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4712,
+      "completion_tokens": 139,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "'한빛 납품' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"한빛 납품 프로젝트에 대한 정보를 제공합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"한빛 납품 프로젝트에 대해 알려줘\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-160",
+      "category": "ko",
+      "text": "회의록에 대해 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "회의록에 대한 정보를 제공합니다.",
+      "confidence": 0.9,
+      "latency_ms": 108587.92103700001,
+      "kind": "question",
+      "requires_confirmation": false,
+      "choices": [
+        "type",
+        "topic"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4061,
+      "completion_tokens": 133,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "'회의록'은 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"회의록에 대한 정보를 제공합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"answer\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"회의록에 대해 알려줘\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-161",
+      "category": "ko",
+      "text": "계약서 해지 조건에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'계약서 해지 조건'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 97019.15354099999,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3736,
+      "completion_tokens": 121,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "topic": "계약서 해지 조건"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"계약서에서 해지 조건에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"계약서 해지 조건\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 11,
+    "correct": 11,
+    "accuracy": 1.0,
+    "by_category": {
+      "ko": {
+        "total": 11,
+        "correct": 11,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "answer": {
+        "total": 3,
+        "correct": 3,
+        "accuracy": 1.0
+      },
+      "clarify": {
+        "total": 4,
+        "correct": 4,
+        "accuracy": 1.0
+      },
+      "search": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      },
+      "summarize": {
+        "total": 3,
+        "correct": 3,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 11,
+        "correct": 11,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 11
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "ko-31",
+        "category": "ko",
+        "text": "'위약금' 들어간 계약서 찾아줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "summary": "'위약금'을 검색합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.460568,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "search",
+            "query": "위약금"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-140",
+        "category": "ko",
+        "text": "견적서에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "견적서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.980212,
+        "kind": "question",
+        "requires_confirmation": false,
+        "choices": [
+          "type",
+          "topic"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "'견적서'는 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-142",
+        "category": "ko",
+        "text": "한빛 납품에 대해서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "'한빛 납품'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 2.840678,
+        "kind": "question",
+        "requires_confirmation": false,
+        "choices": [
+          "project",
+          "topic",
+          "project_topic"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "'한빛 납품' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-154",
+        "category": "ko",
+        "text": "납품 기한 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 0.93255,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "납품 기한 알려줘"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-155",
+        "category": "ko",
+        "text": "한빛 납품 프로젝트의 검수 기준에 대해 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'한빛 납품' 프로젝트에서 '검수 기준'에 관한 내용을 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 1.5928120000000001,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "topic": "검수 기준"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "ko-156",
+        "category": "ko",
+        "text": "이 문서에서 지체상금에 대해 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "열린 문서에서 '지체상금'에 관한 내용을 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 1.4194399999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "topic": "지체상금"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-157",
+        "category": "ko",
+        "text": "검수 기준에 대해 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 1.424783,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "검수 기준에 대해 알려줘"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-158",
+        "category": "ko",
+        "text": "계약서에서 해지 조건 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 1.0310110000000001,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "계약서에서 해지 조건 알려줘"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-159",
+        "category": "ko",
+        "text": "한빛 납품에 대해 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 1.34655,
+        "kind": "question",
+        "requires_confirmation": false,
+        "choices": [
+          "project",
+          "topic",
+          "project_topic"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "'한빛 납품' 프로젝트가 있습니다. 어느 쪽을 말씀하신 건가요?"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-160",
+        "category": "ko",
+        "text": "회의록에 대해 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 1.271485,
+        "kind": "question",
+        "requires_confirmation": false,
+        "choices": [
+          "type",
+          "topic"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "'회의록'은 문서 유형의 이름이기도 합니다. 어느 쪽을 말씀하신 건가요?"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-161",
+        "category": "ko",
+        "text": "계약서 해지 조건에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'계약서 해지 조건'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 2.907775,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "topic": "계약서 해지 조건"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      }
+    ]
+  }
+}

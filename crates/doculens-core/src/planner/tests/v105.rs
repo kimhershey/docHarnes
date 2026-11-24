@@ -270,6 +270,32 @@ fn tell_me_is_an_answer_not_a_search() {
 
 /// B — a plan that only asks never takes the document type as a scope condition.
 #[test]
+fn a_find_sentence_is_a_search_not_an_open() {
+    let c = ctx105();
+    let open = json!([{ "op": "open", "target": "document", "ref": "위약금" }]);
+    // The measured plan: `open` with the type in the scope.
+    let r = modelled(
+        &c,
+        "'위약금' 들어간 계약서 찾아줘",
+        "open",
+        json!({ "filter": { "doc_type": "contract" } }),
+        open.clone(),
+    );
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Search { query, group_by: None, .. }] if query == "위약금"),
+        "{:?}",
+        r.plan
+    );
+    assert_eq!(r.plan.intent, OpKind::Search);
+    assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
+    // A sentence that asks to open stays an open.
+    let r = modelled(&c, "위약금 문서 찾아서 열어줘", "open", json!({}), open.clone());
+    assert!(matches!(r.plan.operations.as_slice(), [Op::Open { .. }]), "{:?}", r.plan);
+    let r = modelled(&c, "위약금 문서 열어줘", "open", json!({}), open);
+    assert!(matches!(r.plan.operations.as_slice(), [Op::Open { .. }]), "{:?}", r.plan);
+}
+
+#[test]
 fn a_question_or_a_search_takes_no_type_condition() {
     let c = ctx105();
     let typed = json!({ "filter": { "doc_type": "contract" } });
