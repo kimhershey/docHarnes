@@ -295,6 +295,74 @@ pub fn dated_outside_quotes(text: &str, today: NaiveDate) -> bool {
     absolute_date(&outside, today).is_some() || prerouter::resolve_relative_date(&outside, today).is_some()
 }
 
+/// Whether the words carry one of `triggers`, matched the way the phrase rules match them: Korean as
+/// a part of the compact text, an English word as a whole word (`"move"` is not in "remove").
+pub fn says(words: &str, triggers: &[&str]) -> bool {
+    Text::new(words, true).has(triggers)
+}
+
+/// Whether the user's own words say anything about a date or a period (1.0.5, `guard::unsaid_scope`):
+/// a date the resolvers read, a number, or a word of time. Wide on purpose — a period the words may
+/// carry stays in the scope; only a sentence without any of it loses a range the model wrote.
+pub fn mentions_date(text: &str, today: NaiveDate) -> bool {
+    const WORDS: &[&str] = &[
+        "오늘",
+        "어제",
+        "그제",
+        "그저께",
+        "올해",
+        "금년",
+        "작년",
+        "전년",
+        "재작년",
+        "내년",
+        "이번",
+        "지난",
+        "저번",
+        "최근",
+        "요즘",
+        "분기",
+        "상반기",
+        "하반기",
+        "연도",
+        "년도",
+        "월별",
+        "이후",
+        "이전",
+        "부터",
+        "까지",
+        "동안",
+        "기간",
+        "날짜",
+        "today",
+        "yesterday",
+        "year",
+        "month",
+        "week",
+        "quarter",
+        "recent*",
+        "latest",
+        "last",
+        "since",
+        "before",
+        "after",
+        "between",
+        "until",
+        "date*",
+        "period",
+    ];
+    let said = user_words(text);
+    said.chars().any(|c| c.is_ascii_digit())
+        || absolute_date(&said, today).is_some()
+        || prerouter::resolve_relative_date(&said, today).is_some()
+        || Text::new(&said, true).has(WORDS)
+}
+
+/// The numbers the words carry ("신뢰도 80% 이상" → 80).
+pub fn numbers_said(words: &str) -> Vec<f64> {
+    numbers(words)
+}
+
 /// The documents a text replacement works on by the phrase rules' reading (`document_edit_rule`):
 /// what the words outside the quotes name — the selection words, a folder, a project — else the
 /// selection, or the open document. Empty when the sentence says "전부" without naming a place, or
@@ -1362,8 +1430,12 @@ fn topic_plan(t: &Text<'_>, ctx: &PlanContext, about: super::guard::About) -> Pl
 
 /// "AA 프로젝트의 BB 내용에 대해 설명해줘", "이 문서에서 BB에 대해 설명해줘" (user decision 2026-11-20):
 /// with a place named, an explanation of a subject is the summary of what that place says about it.
+///
+/// 1.0.5 (user decision A): "… 알려줘" asks the same — the rules read it as a question, and with a
+/// place and a subject it is this request (`guard::summary_topic` decides).
 fn explain_about(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    if t.is_question() || t.has(&["요약", "summar*"]) {
+    let tells = t.has(&["알려", "tell me"]);
+    if (t.is_question() && !tells) || t.has(&["요약", "summar*"]) {
         return None;
     }
     let about = super::guard::summary_topic(t.raw, ctx)?;
@@ -1438,7 +1510,14 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         scope.filter.project_id = None;
     }
     if scope.is_empty() && !t.has(ALL_WORDS) && grouping.is_none() {
-        if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr) {
+        // 1.0.5: a project a summary names by its name alone ("AAA 참고자료 요약해줘") is where to
+        // look — as on the model path (`guard::where_to_look`) — before the open document stands in
+        // for it: the open document is rarely the project's reference material.
+        let named_project = if summary_only && !points(t.raw) { super::guard::project_named(t.raw, ctx) } else { None };
+        if let Some(project) = named_project {
+            scope.filter.project_id = Some(project.id.clone());
+        } else if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr)
+        {
             scope.doc_ids = selection_ids(ctx);
         } else if ctx.current_folder.is_some() && t.has(&["여기", "here"]) {
             scope.folder = ctx.current_folder.clone();
@@ -1633,7 +1712,9 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         .collect::<Vec<_>>()
         .join(" ");
     let mut q = q.trim().trim_end_matches(['?', '？', '.']).trim().to_string();
-    // The type label moved into the scope filter ("'위약금' 들어간 계약서" → query 위약금, type contract).
+    // The type's name is not what to look for ("'위약금' 들어간 계약서" → query 위약금) — and, since 1.0.5
+    // (user decision B), no scope condition either: a search looks in every document, whatever each
+    // was classified as. A query of nothing but the name keeps it ("계약서 찾아줘").
     if let Some(d) = doc_type(t, ctx) {
         let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
         for label in [d.label_ko.as_str(), d.label_en.as_str()].into_iter().chain(aliases.iter().copied()) {
@@ -1658,8 +1739,7 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         ));
     }
     let d = date(t, ctx);
-    let dt = doc_type(t, ctx);
-    let scope = scope_or_project(t, ctx, dt, d.as_ref());
+    let scope = scope_or_project(t, ctx, None, d.as_ref());
     Some(mk(
         Op::Search { query: q.clone(), mode: None, top_k: None, group_by: None },
         scope,

@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::documents::repo::list_documents;
 use crate::documents::{DocumentFilter, DocumentRecord, DocumentRole, DocumentSort, DocumentStatus};
 
-use super::{compact, Scope};
+use super::{compact, Scope, TypeMatch};
 
 /// Date a document is filed under: its document date, else the import date
 /// (design §3.5 "날짜 기준 필드는 doc_date 기본"). Returns `(YYYY-MM-DD, basis)`.
@@ -46,13 +46,49 @@ pub fn reviewed_documents(conn: &Connection, ids: &[String]) -> rusqlite::Result
     Ok(out)
 }
 
+/// The names a document type goes by, as comparison keys ([`compact`]): the names of the forms
+/// registered for it, the labels of the built-in sample form and the aliases commands use
+/// (`pipeline::schema::doc_type_aliases`). Only names of three or more characters: "계약" or "cr"
+/// inside a file name says nothing about its type.
+pub fn type_names(conn: &Connection, slug: &str) -> rusqlite::Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    let mut st = conn.prepare_cached("SELECT name, name_en FROM schemas WHERE doc_type = ?1")?;
+    let rows = st.query_map([slug], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+    for row in rows {
+        let (name, name_en) = row?;
+        names.push(name);
+        names.extend(name_en);
+    }
+    for b in crate::pipeline::schema::builtins().into_iter().filter(|b| b.doc_type == slug) {
+        names.push(b.name_ko.to_string());
+        names.push(b.name_en.to_string());
+    }
+    names.extend(crate::pipeline::schema::doc_type_aliases(slug).iter().map(|a| a.to_string()));
+    let mut keys: Vec<String> = names.iter().map(|n| compact(n)).filter(|k| k.chars().count() >= 3).collect();
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
+}
+
+/// Whether the document carries one of the type's names (`type_names`) in its title, its original
+/// file name or the file name it has now.
+pub fn named_as(doc: &DocumentRecord, names: &[String]) -> bool {
+    let file = doc.rel_path.rsplit(['/', '\\']).next().unwrap_or_default();
+    let own = [doc.title.as_deref().unwrap_or_default(), doc.original_name.as_str(), file].map(compact);
+    names.iter().any(|n| own.iter().any(|o| o.contains(n.as_str())))
+}
+
 /// Documents in scope, sorted by path. Deleted / importing / missing / error
 /// documents are never in scope. `doc_ids` and the filter intersect.
+///
+/// 1.0.5 (user decision B): a `doc_type` condition takes the documents classified as the type and
+/// the ones that carry the type's name in their title or file name — a document the classifier has
+/// not seen, or got wrong, is still "the contract" to its owner. `filter.type_match` narrows it to
+/// one of the two. A condition that matches nothing matches nothing: it is never dropped.
 pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<DocumentRecord>> {
     let f = &scope.filter;
     let filter = DocumentFilter {
         folder: scope.folder.clone(),
-        doc_type: f.doc_type.clone(),
         tag: f.tags.first().cloned(),
         review_status: f.review_status,
         query: f.keyword.clone(),
@@ -64,6 +100,20 @@ pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<Documen
     docs.retain(|d| !matches!(d.status, DocumentStatus::Importing | DocumentStatus::Missing | DocumentStatus::Error));
     if !scope.doc_ids.is_empty() {
         docs.retain(|d| scope.doc_ids.contains(&d.id));
+    }
+    if let Some(slug) = f.doc_type.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let classified = |d: &DocumentRecord| d.doc_type.as_deref() == Some(slug);
+        match f.type_match {
+            Some(TypeMatch::Classified) => docs.retain(classified),
+            Some(TypeMatch::Named) => {
+                let names = type_names(conn, slug)?;
+                docs.retain(|d| named_as(d, &names));
+            }
+            Some(TypeMatch::Both) | None => {
+                let names = type_names(conn, slug)?;
+                docs.retain(|d| classified(d) || named_as(d, &names));
+            }
+        }
     }
     // Project scope (plan §6): the project's members only (an unknown project → nothing).
     // "참고 자료에서 …" / "업무 문서만 …" (0.8.1): the kind of document, when the sentence names one.

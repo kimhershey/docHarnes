@@ -327,6 +327,9 @@ export const api = {
   /** `plannedText`: the 되묻기 text the plan was made from, when it is not `text` (`ExecuteArgs.planned_text`). */
   plannerExecute: (plan: Plan, text: string, context: UiPlanContext = {}, plannedText: string | null = null) =>
     invoke<ExecuteResponse>("planner_execute", { args: { plan, text, context, ...(plannedText ? { planned_text: plannedText } : {}) } satisfies ExecuteArgs }),
+  /** Checks and previews a plan without running it (1.0.5: the plan of a choice the user picked). */
+  plannerPreview: (plan: Plan, text: string, context: UiPlanContext = {}, plannedText: string | null = null) =>
+    invoke<ExecuteResponse>("planner_execute", { args: { plan, text, context, ...(plannedText ? { planned_text: plannedText } : {}), preview_only: true } satisfies ExecuteArgs }),
   organizePlan: (req: OrganizeRequest) => invoke<OrganizePlan>("organize_plan", { req }),
   organizeApply: (plan: OrganizePlan, label: string | null = null) => invoke<string>("organize_apply", { plan, label }),
   journalBatches: (limit = 50) => invoke<JournalBatch[]>("journal_batches", { limit }),

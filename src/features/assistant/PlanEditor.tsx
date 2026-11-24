@@ -222,7 +222,8 @@ export function PlanEditor({ plan, context, onChange }: { plan: Plan; context: P
           <label htmlFor="plan-scope-doc-type" className="text-fg-muted">
             {t("planner.scope.doc_type")}
           </label>
-          <Select value={filter.doc_type ?? ANY} onValueChange={(v) => setFilter({ doc_type: v === ANY ? undefined : v })}>
+          {/* (how the type matched — a choice the user made for the type that was there — does not carry over to another type) */}
+          <Select value={filter.doc_type ?? ANY} onValueChange={(v) => setFilter({ doc_type: v === ANY ? undefined : v, type_match: undefined })}>
             <SelectTrigger id="plan-scope-doc-type" className="h-8" aria-label={t("planner.scope.doc_type")} data-testid="plan-editor-scope-doc-type">
               <SelectValue />
             </SelectTrigger>
@@ -235,6 +236,11 @@ export function PlanEditor({ plan, context, onChange }: { plan: Plan; context: P
               ))}
             </SelectContent>
           </Select>
+          {filter.doc_type && filter.type_match && (
+            <span className="col-start-2 text-fg-subtle" data-testid="plan-editor-scope-type-match" data-type-match={filter.type_match}>
+              {t(`planner.scope.type_match.${filter.type_match}`)}
+            </span>
+          )}
           <label htmlFor="plan-scope-from" className="text-fg-muted">
             {t("planner.scope.date_from")}
           </label>

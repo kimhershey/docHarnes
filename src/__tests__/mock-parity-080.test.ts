@@ -365,27 +365,35 @@ describe("planner (rules, validate, guard)", () => {
     }
   });
 
-  it("a question keeps the scope it names: a type named as the place to look, a project, a date (KNO-5)", async () => {
+  it("a question keeps the scope it names — a project, a date (KNO-5) — and never a document type (1.0.5, decision B)", async () => {
     await importDocs(["회의록_10월.pdf", "견적서_한빛.pdf"]);
     const project = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "한빛 포털" } });
     const ctx = planner.buildContext();
     const plan = (text: string) => planner.planText(text, ctx).plan;
 
+    // `guard::untyped_scope` / `rules::answer`: a question is looked up in every document of the scope, whatever
+    // each was classified as — a type named as the place to look ("회의록에서 …") is no condition any more.
     const minutes = plan("회의록에서 결정된 사항은?");
     expect(minutes.operations[0]).toMatchObject({ op: "answer" });
-    expect(minutes.scope.filter).toMatchObject({ doc_type: "meeting_minutes" });
-    expect(plan("견적서 중에서 합계가 가장 큰 것은?").scope.filter).toMatchObject({ doc_type: "estimate" });
-    expect(plan("what was decided in the meeting minutes?").scope.filter).toMatchObject({ doc_type: "meeting_minutes" });
-    // The type a question is about is not a filter on the documents of that type.
+    expect(minutes.scope.filter?.doc_type ?? null).toBeNull();
+    expect(plan("what was decided in the meeting minutes?").scope.filter?.doc_type ?? null).toBeNull();
     expect(plan("견적서 내용은?").scope.filter?.doc_type ?? null).toBeNull();
     expect(plan("회의록이 뭐야?").scope.filter?.doc_type ?? null).toBeNull();
+    // … nor for a search: the type's name is neither a condition nor the query, unless it is all there is.
+    const found = plan("'위약금' 들어간 계약서 찾아줘");
+    expect(found.operations[0]).toMatchObject({ op: "search", query: "위약금" });
+    expect(found.scope.filter?.doc_type ?? null).toBeNull();
+    expect(plan("계약서 찾아줘").operations[0]).toMatchObject({ op: "search", query: "계약서" });
+    // Every other plan keeps it: a summary, a total.
+    expect(plan("회의록 요약해줘").scope.filter).toMatchObject({ doc_type: "meeting_minutes" });
+    expect(plan("견적서 합계 알려줘").scope.filter).toMatchObject({ doc_type: "estimate" });
 
     const inProject = plan("한빛 포털 프로젝트 문서에서 납품 기한 알려줘");
     expect(inProject.operations[0]).toMatchObject({ op: "answer" });
     expect(inProject.scope.filter).toMatchObject({ project_id: project.id });
 
     const dated = plan("지난달 회의록에서 결정된 사항은?");
-    expect(dated.scope.filter).toMatchObject({ doc_type: "meeting_minutes" });
+    expect(dated.scope.filter?.doc_type ?? null).toBeNull();
     expect(dated.scope.filter?.date_from).toMatch(/^\d{4}-\d{2}-01$/);
     expect(dated.scope.filter?.date_to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // Small talk and a sentence that brings its own text look nothing up: no scope.
@@ -756,11 +764,14 @@ describe("planner (rules, validate, guard)", () => {
       expect(s1.plan.scope.filter?.with_reference, text).toBe(true);
       expect(s1.plan.summary, text).toBe("'AAA' 프로젝트에서 '계약 금액'에 관한 내용을 찾아 요약합니다");
     }
-    // 2. The content alone: every document, no project — also when a project is called so (the card names the other reading).
+    // 2. The content alone: every document, no project. A subject that is also the name of a project is asked
+    //    about with the readings as choices (1.0.5, `choices::overlap`; the note that named the other reading is gone).
     expect(slots("계약 금액에 대해서 요약해줘")).toMatchObject({ op: "summarize", project: null, topic: "계약 금액", docs: [] });
-    const collision = slots("AAA에 대해서 요약해줘");
-    expect(collision).toMatchObject({ op: "summarize", project: null, topic: "AAA", group: null });
-    expect(collision.codes).toContain("topic_names_project");
+    const collision = planner.planText("AAA에 대해서 요약해줘", named);
+    expect(collision.plan.intent).toBe("clarify");
+    expect((collision.choices ?? []).map((c) => c.key)).toEqual(["project", "topic", "project_topic"]);
+    expect(collision.choices![1]!.plan).toMatchObject({ operations: [{ op: "summarize", topic: "AAA" }] });
+    expect(collision.choices![1]!.plan.scope.filter?.project_id ?? null).toBeNull();
     expect(slots("계약 금액에 대해서 요약해줘").codes).not.toContain("topic_names_project");
     // (an explanation without a place stays a question: it may be answered from general knowledge)
     expect(slots("계약 금액에 대해 설명해줘").op).not.toBe("summarize");

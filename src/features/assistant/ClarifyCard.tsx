@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { PlanChoice } from "@/lib/types";
 import type { ClarifyStatus } from "@/stores/assistant";
 
 /**
@@ -13,6 +14,10 @@ import type { ClarifyStatus } from "@/stores/assistant";
  * asked); 취소 drops the question. Both are handled by rules, never by the model (user decision
  * 2026-11-09). When no planner model was available (`source === "none"`, issue `no_model`) it offers
  * to load the model.
+ *
+ * 1.0.5: a question about a sentence that can be read more than one way comes with its readings
+ * (`choices`) — one button each. Picking one runs that ready-made plan (nothing is planned again);
+ * the reply box stays for an answer in the user's own words. `picked` marks the reading that was chosen.
  */
 export function ClarifyCard({
   question,
@@ -21,9 +26,13 @@ export function ClarifyCard({
   noModel,
   modelId,
   loading,
+  choices = [],
+  picked = null,
+  choosing = false,
   onLoadModel,
   onRephrase,
   onAskBack,
+  onChoose,
   onCancel,
 }: {
   question: string;
@@ -32,9 +41,14 @@ export function ClarifyCard({
   noModel: boolean;
   modelId: string | null;
   loading: boolean;
+  choices?: PlanChoice[];
+  picked?: string | null;
+  /** A picked reading is being checked: the buttons wait. */
+  choosing?: boolean;
   onLoadModel: () => void;
   onRephrase: () => void;
   onAskBack: (reply: string) => void;
+  onChoose?: (choice: PlanChoice) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -62,6 +76,26 @@ export function ClarifyCard({
         <p className="rounded-md bg-warn-soft px-2 py-1.5 text-xs text-warn" data-testid="clarify-no-model">
           {t("planner.clarify.no_model")}
         </p>
+      )}
+      {choices.length > 0 && (
+        <div className="flex flex-col items-start gap-1.5" role="group" aria-label={t("planner.clarify.choices")} data-testid="clarify-choices">
+          {choices.map((choice) => (
+            <Button
+              key={choice.key}
+              type="button"
+              size="sm"
+              variant={picked === choice.key ? "default" : "secondary"}
+              className="h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-left"
+              disabled={!pending || choosing}
+              aria-pressed={picked === choice.key}
+              onClick={() => onChoose?.(choice)}
+              data-testid="clarify-choice"
+              data-choice={choice.key}
+            >
+              {choice.label}
+            </Button>
+          ))}
+        </div>
       )}
       {pending && (
         <form
@@ -97,7 +131,7 @@ export function ClarifyCard({
           </Button>
         </form>
       )}
-      {pending && <span className="text-xs text-fg-subtle">{t("planner.clarify.retry_hint")}</span>}
+      {pending && <span className="text-xs text-fg-subtle">{choices.length > 0 ? t("planner.clarify.choices_hint") : t("planner.clarify.retry_hint")}</span>}
     </div>
   );
 }

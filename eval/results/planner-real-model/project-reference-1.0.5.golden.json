@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "context": "topic-summary-1.0.2-open-document.context.json",
+  "description": "1.0.5(사용자 보고: 프로젝트 이름을 말하면 참고 자료 범위가 실패 — \"이 범위에는 참고 자료가 없습니다\") — 프로젝트의 참고 자료를 요약 · 질문하는 문장 8개. 기대 범위는 프로젝트와 종류(role: knowledge)뿐이다: 문장에 없는 태그 · 상태 · 파일 이름 조건(null = 없어야 함)도, 참고 자료를 바꾸는 단계도 없어야 한다. 수정 전 측정은 gemma4-e4b-q4km-1.0.5-project-reference-before.json(기대값이 의도 · 연산뿐이던 때의 채점: 6/8; 범위까지 보면 p-5 · p-6 · p-7 · p-8도 틀렸다). 컨텍스트: 문서 하나가 열려 있고 프로젝트 '한빛 납품'과 'AAA'가 있다.",
+  "items": [
+    {
+      "id": "p-1",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트의 참고자료 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      }
+    },
+    {
+      "id": "p-2",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트 참고자료만 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      }
+    },
+    {
+      "id": "p-3",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트의 참고자료에서 요구사항 정의서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "doc_type": "srs",
+            "tags": null,
+            "status": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "측정(수정 전): [manage_reference add, summarize group_by project] · scope {doc_type: srs, tags: [knowledge]} — 요약만 청한 문장에 참고 자료를 바꾸는 단계, 범위에 프로젝트 없음"
+    },
+    {
+      "id": "p-4",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트 참고자료에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      }
+    },
+    {
+      "id": "p-5",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 참고자료 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "측정(수정 전): scope에 status: reviewed — 문장에 없는 조건"
+    },
+    {
+      "id": "p-6",
+      "category": "ko",
+      "kind": "question",
+      "text": "한빛 납품 프로젝트의 참고 자료를 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "측정(수정 전): scope에 tags: [한빛 납품] — 프로젝트 이름을 태그로"
+    },
+    {
+      "id": "p-7",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트의 참고자료에서 보안 요구사항 알려줘",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": null,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "doc_type": null
+          }
+        },
+        "alt": [
+          {
+            "intent": "summarize",
+            "ops": [
+              "summarize"
+            ],
+            "params": [
+              {
+                "topic": "보안 요구사항"
+              }
+            ],
+            "scope": {
+              "filter": {
+                "project_id": "p-aaa",
+                "role": "knowledge",
+                "tags": null,
+                "status": null,
+                "keyword": null
+              }
+            }
+          }
+        ]
+      },
+      "note": "측정(수정 전): scope에 tags: [AAA]. 주제를 '…에 대해'로 말하지 않았으므로 답변(주제 요약으로 써도 맞다)"
+    },
+    {
+      "id": "p-8",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA프로젝트 참고자료 요약",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "role": "knowledge",
+            "tags": null,
+            "status": null,
+            "keyword": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "측정(수정 전): scope에 tags: [AAA]"
+    }
+  ]
+}

@@ -211,26 +211,17 @@
       "kind": "question",
       "text": "AAA에 대해서 요약해줘",
       "expected": {
-        "intent": "summarize",
+        "intent": "clarify",
         "ops": [
-          "summarize"
+          "clarify"
         ],
-        "params": [
-          {
-            "topic": "AAA",
-            "target": null,
-            "group_by": null,
-            "length": null
-          }
-        ],
-        "confirm": false,
-        "scope": {
-          "filter": {
-            "project_id": null
-          }
-        }
+        "choices": [
+          "project",
+          "topic",
+          "project_topic"
+        ]
       },
-      "note": "1.0.2의 주제 요약은 그대로(대상 칸만 없어짐)"
+      "note": "1.0.5(사용자 결정 C): 주제 'AAA'가 프로젝트 이름과 같아 세 가지 해석을 선택지로 묻는다 — 1.0.3 측정(결과 파일)에서는 주제 요약 {topic: AAA}이 정답이었다"
     },
     {
       "id": "s-10",

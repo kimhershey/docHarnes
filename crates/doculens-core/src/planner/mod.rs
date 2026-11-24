@@ -14,6 +14,7 @@
 //! The op set here is the v1.0 subset of appendix D (phase 5 scope decision);
 //! document generation / project ops stay for v1.1.
 
+pub mod choices;
 pub mod exec;
 pub mod fastpath;
 pub mod guard;
@@ -1568,6 +1569,25 @@ pub struct ScopeFilter {
     /// [`ScopeFilter::is_empty`].
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub with_reference: bool,
+    /// 1.0.5 (user decision B): which documents a `doc_type` condition takes — the ones classified
+    /// as the type, the ones that carry the type's name in their title or file name, or both
+    /// (`None` = both). Set by the choice the user makes when the two differ
+    /// ([`choices::type_overlap`]), never by the model: it is not in the plan grammar. Not a
+    /// restriction of its own: it does not count for [`ScopeFilter::is_empty`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_match: Option<TypeMatch>,
+}
+
+/// How a `doc_type` condition of the scope matches documents ([`ScopeFilter::type_match`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeMatch {
+    /// The documents the classifier (or the user) gave the type.
+    Classified,
+    /// The documents whose title or file name carries one of the type's names.
+    Named,
+    /// Either.
+    Both,
 }
 
 impl ScopeFilter {
@@ -1896,4 +1916,20 @@ pub struct PlanResult {
     /// question and no plan call was made (0.8.0 plan §1.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    /// 1.0.5 (user decision C): the ready-made plans of a sentence that can be read more than one
+    /// way. When there are any, `plan` is the clarification that asks which one is meant; the one
+    /// the user picks is executed as it is — nothing is planned again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<PlanChoice>,
+}
+
+/// One reading of a sentence that has several ([`PlanResult::choices`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanChoice {
+    /// Stable name of the reading (`project` / `topic` / `project_topic` / `type` / `classified` /
+    /// `named` / `both`).
+    pub key: String,
+    /// The button's text, in the user's language.
+    pub label: String,
+    pub plan: Plan,
 }
