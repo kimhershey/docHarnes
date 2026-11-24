@@ -727,9 +727,11 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     const kept = (req.keep_chunks ?? []).length
       ? Object.values(s.chunks).flat().filter((c) => req.keep_chunks?.includes(c.id) && (!inScope || inScope.has(c.document_id))).map((c) => hitFromChunk(c, wsDocs().find((x) => x.id === c.document_id), ["morph"]))
       : [];
-    const fresh = query.trim() ? search({ query, scope, limit: (req.top_k ?? 8) * 2, per_document: 4 }).hits : [];
+    // 근거 청크 수 is 1–200 (1.0.6); a larger count also lets more passages of one document in (four at the default of eight).
+    const topK = Math.min(200, Math.max(1, Math.trunc(req.top_k ?? 8)));
+    const fresh = query.trim() ? search({ query, scope, limit: Math.min(400, Math.max(4, topK * 2)), per_document: Math.max(4, Math.floor(topK / 2)) }).hits : [];
     const hits = [...kept, ...fresh.filter((h) => !kept.some((k) => k.chunk_id === h.chunk_id))];
-    const top = hits.slice(0, req.top_k ?? 8);
+    const top = hits.slice(0, topK);
     base.sources = top.map((h, i) => citation(i + 1, h));
     if (top.length === 0) {
       base.no_evidence = true;

@@ -192,6 +192,10 @@ impl Fusion {
     }
 }
 
+/// Most hits one search returns. 1.0.6: 400 — a topic summary looks up twice 근거 청크 수 (1–200)
+/// passages; it was 200, which is still what a search of the planner or the search screen asks at most.
+pub const SEARCH_LIMIT_MAX: u32 = 400;
+
 /// Runs a search request.
 pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchResponse> {
     let started = Instant::now();
@@ -201,7 +205,7 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
     if query.is_empty() {
         return Ok(resp);
     }
-    let limit = req.limit.clamp(1, 200);
+    let limit = req.limit.clamp(1, SEARCH_LIMIT_MAX);
     let mut terms = deps.analyzer.query_terms(query);
     terms.truncate(MAX_QUERY_TERMS);
     let mut words = raw_words(query);
@@ -307,7 +311,7 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
         if let Some(embedder) = deps.embedder {
             match embed::embed_query(embedder, query) {
                 Ok(q) => {
-                    let k = (limit * 4).clamp(20, 400) as usize;
+                    let k = (limit * 4).clamp(20, 4 * SEARCH_LIMIT_MAX) as usize;
                     let hits = deps.db.with_read(|c| embed::knn(c, &q, k, allowed.as_ref()))?;
                     if !hits.is_empty() {
                         resp.used_vector = true;

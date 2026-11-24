@@ -375,7 +375,7 @@
     "key": "knowledge.context_tokens",
     "type": {
       "kind": "integer",
-      "max": 24000,
+      "max": 262144,
       "min": 1000
     }
   },
@@ -384,7 +384,7 @@
     "key": "knowledge.top_k",
     "type": {
       "kind": "integer",
-      "max": 32,
+      "max": 200,
       "min": 1
     }
   },

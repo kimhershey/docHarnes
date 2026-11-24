@@ -134,11 +134,13 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("knowledge.allow_general_knowledge", ValueType::Bool, "근거 없을 때 일반 지식 허용", "allow general knowledge"),
     s(
         "knowledge.context_tokens",
-        ValueType::Int { min: 1_000, max: 24_000 },
+        // (`knowledge::answer::CONTEXT_TOKENS_RANGE` — the largest context a registry model takes)
+        ValueType::Int { min: 1_000, max: 262_144 },
         "근거 컨텍스트 토큰",
         "evidence context tokens",
     ),
-    s("knowledge.top_k", ValueType::Int { min: 1, max: 32 }, "근거 개수(top-k)", "evidence hits (top-k)"),
+    // (`knowledge::answer::TOP_K_RANGE`)
+    s("knowledge.top_k", ValueType::Int { min: 1, max: 200 }, "근거 개수(top-k)", "evidence hits (top-k)"),
     s(
         "knowledge.chunk_target_tokens",
         ValueType::Int { min: 120, max: 2_000 },
@@ -668,6 +670,52 @@ mod tests {
                 assert!((got - want).abs() < 1e-6, "{}: {want} is accepted but saved as {got}", spec.key);
             }
         }
+    }
+
+    /// 1.0.6 (user decision 2026-11-24): the evidence budget and the passage count go as far as the
+    /// answer code takes them; the chunk size stays, bounded by the embedding model's context.
+    #[test]
+    fn the_evidence_settings_have_the_ranges_of_the_answer_code() {
+        use crate::knowledge::answer::{CONTEXT_TOKENS_RANGE, TOP_K_RANGE};
+        let range = |key: &str| match find(key).unwrap().1.ty {
+            ValueType::Int { min, max } => (min, max),
+            _ => panic!("{key} is not an integer"),
+        };
+        assert_eq!(range("knowledge.context_tokens"), (1_000, 262_144));
+        assert_eq!(
+            range("knowledge.context_tokens"),
+            (i64::from(*CONTEXT_TOKENS_RANGE.start()), i64::from(*CONTEXT_TOKENS_RANGE.end()))
+        );
+        assert_eq!(range("knowledge.top_k"), (1, 200));
+        assert_eq!(range("knowledge.top_k"), (i64::from(*TOP_K_RANGE.start()), i64::from(*TOP_K_RANGE.end())));
+        assert_eq!(range("knowledge.chunk_target_tokens"), (120, 2_000));
+        let (_, spec) = find("knowledge.context_tokens").unwrap();
+        for (value, ok) in
+            [(999, false), (1_000, true), (24_001, true), (200_000, true), (262_144, true), (262_145, false)]
+        {
+            assert_eq!(coerce(spec, &mut json!(value)).is_ok(), ok, "{value}");
+        }
+        let (_, spec) = find("knowledge.top_k").unwrap();
+        for (value, ok) in [(0, false), (33, true), (200, true), (201, false)] {
+            assert_eq!(coerce(spec, &mut json!(value)).is_ok(), ok, "{value}");
+        }
+        // What the settings file keeps is the same range.
+        let mut k = crate::settings::KnowledgeSettings {
+            context_tokens: 1_000_000,
+            top_k: 1_000,
+            chunk_target_tokens: 5_000,
+            ..Default::default()
+        };
+        k.normalize();
+        assert_eq!((k.context_tokens, k.top_k, k.chunk_target_tokens), (262_144, 200, 2_000));
+        let mut k = crate::settings::KnowledgeSettings {
+            context_tokens: 200_000,
+            top_k: 150,
+            chunk_target_tokens: 0,
+            ..Default::default()
+        };
+        k.normalize();
+        assert_eq!((k.context_tokens, k.top_k, k.chunk_target_tokens), (200_000, 150, 120));
     }
 
     #[test]

@@ -88,6 +88,23 @@ describe("describeJobError", () => {
     expect(describeJobError(job({ error: "no_documents" }), t)).toBe(ko.jobs.error.no_documents);
   });
 
+  it("says to lower the evidence token budget when that is what failed (1.0.6)", () => {
+    // A summary step the model's context could not hold after the retries (`knowledge::answer::EVIDENCE_TOO_LARGE`).
+    const refused = "engine error: evidence_too_large: /v1/chat/completions: HTTP 400: request (9000 tokens) exceeds the available context size (8192 tokens)";
+    expect(describeJobError(job({ error: refused }), t)).toBe(ko.jobs.error.evidence_too_large);
+    expect(describeJobError(job({ error: `summarize: ${refused}` }), t)).toBe(`${ko.planner.ops.summarize}: ${ko.jobs.error.evidence_too_large}`);
+    expect(ko.jobs.error.evidence_too_large).toContain("근거 토큰 예산을 낮춘");
+    // A model whose context the budget raised did not load (`engine_bridge::load_error`).
+    const load = "context_budget_load_failed: ctx-size 75776: engine error: model gemma4-e4b-q6k failed to load (exit code Some(1))";
+    const text = describeJobError(job({ kind: "model_load", error: load }), t)!;
+    expect(text).toContain("75,776 토큰");
+    expect(text).toContain("근거 토큰 예산을 낮추고");
+    const english = ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t;
+    expect(describeJobError(job({ kind: "model_load", error: load }), english)).toContain("75,776 tokens");
+    // Any other failed load stays as it came.
+    expect(describeJobError(job({ kind: "model_load", error: "engine error: model x failed to load (exit code Some(1))" }), t)).toBe("engine error: model x failed to load (exit code Some(1))");
+  });
+
   it("tells the three reasons a 보완요청서 has nothing to request apart", () => {
     expect(describeJobError(job({ error: "no_findings" }), t)).toBe(ko.jobs.error.no_findings);
     expect(describeJobError(job({ error: "findings_not_requestable" }), t)).toBe(ko.jobs.error.findings_not_requestable);

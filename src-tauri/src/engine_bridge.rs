@@ -297,6 +297,10 @@ pub fn build_presets(state: &AppState) -> Result<PresetBuild> {
         settings: &settings.models,
         active_model: active.as_deref(),
         debug: cfg!(debug_assertions),
+        // 1.0.6: a chat model is loaded with a context that holds 근거 토큰 예산. Like the profile, a
+        // change of the setting reaches the engine when the presets are written again (engine start /
+        // restart, a changed model folder, another workspace) and a model is loaded after that.
+        evidence_tokens: settings.knowledge.context_tokens,
     };
     Ok(presets::build_presets(&registry, &index.discovered, &ctx))
 }
@@ -304,18 +308,20 @@ pub fn build_presets(state: &AppState) -> Result<PresetBuild> {
 /// Generates `presets.ini` and writes it to the app-data directory. Writers
 /// are serialised through `AppState::presets_lock`.
 pub fn write_presets(state: &AppState) -> Result<PresetBuild> {
-    let _guard = state.presets_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut written = state.presets_lock.lock().unwrap_or_else(|e| e.into_inner());
     let build = build_presets(state)?;
     build.file.write(&state.app_paths.presets_file())?;
+    *written = build.budget_contexts.clone();
     Ok(build)
 }
 
 /// Regenerates the presets and asks a running router to re-read them
 /// (`GET /models?reload=1`). One serialised "sync" used by every caller.
 pub fn regenerate_and_reload(state: &AppState) -> Result<()> {
-    let _guard = state.presets_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut written = state.presets_lock.lock().unwrap_or_else(|e| e.into_inner());
     let build = build_presets(state)?;
     build.file.write(&state.app_paths.presets_file())?;
+    *written = build.budget_contexts;
     if state.engine.is_running() {
         state.engine.refresh_models(true)?;
     }
@@ -453,6 +459,25 @@ fn spawn_job_thread(
         .ok();
 }
 
+/// Reason code in front of a failed load of a model whose context 근거 토큰 예산 raised above the
+/// profile's: the jobs screen tells the user to lower the budget (`jobs.error.context_budget_load_failed`).
+pub const CONTEXT_BUDGET_LOAD_FAILED: &str = "context_budget_load_failed";
+
+/// The error text of a failed model load. 1.0.6 (user decision 2026-11-24: no limit on the evidence
+/// budget, failures are reported): when the budget made the context of this model larger than the
+/// profile's, the likeliest reason is that the context does not fit the memory — the error says so.
+fn load_error(state: &AppState, model_id: &str, e: &CoreError) -> String {
+    let load_failed = matches!(e, CoreError::Engine(_) | CoreError::Timeout(_) | CoreError::EngineNotRunning);
+    if load_failed {
+        // (what the preset file the engine reads says — not the settings of this moment)
+        let written = state.presets_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(context) = written.get(model_id) {
+            return format!("{CONTEXT_BUDGET_LOAD_FAILED}: ctx-size {context}: {e}");
+        }
+    }
+    e.to_string()
+}
+
 /// Loads a model as a job (progress from the router load stages; cancel
 /// unloads the half-loaded instance). Returns the job id.
 pub fn load_model_job(app: &AppHandle, model_id: &str, warmup: Option<bool>) -> String {
@@ -500,7 +525,7 @@ pub fn load_model_job(app: &AppHandle, model_id: &str, warmup: Option<bool>) -> 
             .engine
             .load_model_cancellable(&id, LOAD_TIMEOUT, warmup, Some(&cancel))
             .map(|m| Some(format!("{} ({} bytes)", m.status, m.memory_effective_bytes.unwrap_or(0))))
-            .map_err(|e| e.to_string());
+            .map_err(|e| load_error(&state, &id, &e));
         state.jobs.finish(&job2, result.clone());
         let _ = reporter.join();
         result

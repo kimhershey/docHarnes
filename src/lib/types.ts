@@ -489,6 +489,8 @@ export interface ModelInstanceStatus {
   input_modalities: string[];
   loaded_at: string | null;
   warmed_up: boolean;
+  /** Context size (tokens) the router reports for the loaded instance (`ctx-size` of its preset). */
+  ctx?: number | null;
 }
 
 export interface EngineStatus {

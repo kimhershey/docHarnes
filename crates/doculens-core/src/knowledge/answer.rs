@@ -158,11 +158,25 @@ const EXCERPT_CHARS: usize = 160;
 /// Longest question / selection text that reaches the prompt (the text of a text-only request is sized
 /// from the model's context instead, see `fit_text_only`).
 const MAX_QUESTION_CHARS: usize = 4_000;
-pub const TOP_K_RANGE: std::ops::RangeInclusive<u32> = 1..=32;
-pub const CONTEXT_TOKENS_RANGE: std::ops::RangeInclusive<u32> = 1_000..=24_000;
+/// Evidence passages of one answer (근거 청크 수). 1.0.6: 1–200 (it was 1–32, and 1–20 on the settings screen).
+pub const TOP_K_RANGE: std::ops::RangeInclusive<u32> = 1..=200;
+/// Evidence budget of one call (근거 토큰 예산). 1.0.6 (user decision 2026-11-24: "그냥 제한 다 풀고 쓰고
+/// 오류나면 오류나는대로 토큰 줄이라고 하자"): up to the largest context a model of the registry takes
+/// (`ctx_max` of Gemma 4 12B — compared with the registry by a test); it was 24,000. The engine loads
+/// the chat model with a context that holds the budget ([`context_needed`]); what a PC cannot load or
+/// a model cannot fit is reported, with the advice to lower the budget ([`EVIDENCE_TOO_LARGE`]).
+pub const CONTEXT_TOKENS_RANGE: std::ops::RangeInclusive<u32> = 1_000..=262_144;
+/// The evidence budget of a fresh install — the one the profiles' contexts were sized for.
+pub const DEFAULT_CONTEXT_TOKENS: u32 = 6_000;
+/// Passages a topic summary looks up at most (twice `top_k`).
+const TOPIC_PASSAGES_MAX: u32 = 2 * *TOP_K_RANGE.end();
 /// Tokens the prompt takes beyond the evidence: system rules, block labels, the request line and the
 /// server's own margin.
 const PROMPT_SCAFFOLD_TOKENS: u32 = 700;
+/// Reason code of a request the model's context cannot hold even after the evidence was cut down and
+/// retried: the user is told to lower 근거 토큰 예산 (`errors.reasons.evidence_too_large`). It travels
+/// in front of the server's own message, which [`context_overflow`] still recognises.
+pub const EVIDENCE_TOO_LARGE: &str = "evidence_too_large";
 /// Smallest evidence budget worth asking with (a chunk or two).
 const MIN_EVIDENCE_TOKENS: u32 = 400;
 /// Context assumed for a text-only request when the caller does not know the loaded model's context
@@ -179,18 +193,85 @@ const MAX_HISTORY_TURNS: usize = 8;
 const MAX_TURN_CHARS: usize = 500;
 const MAX_SESSION_ITEMS: usize = 5;
 
+/// The reply room an evidence budget asks for, whatever the model: the fixed limit (`base`) at the
+/// default budget, more when the user raises it — an answer a fifth of the budget, a summary a quarter.
+/// 1.0.6: no upper bound of its own (it was four times the default).
+fn reply_wanted(context_tokens: u32, base: u32) -> u32 {
+    let share = if base >= MAX_SUMMARY_TOKENS { 4 } else { 5 };
+    (context_tokens / share).max(base)
+}
+
+/// What a call takes of the model's context beyond its evidence and the blocks the request brings
+/// (question, selection, conversation, screen): the prompt scaffold and the reply.
+fn fixed_room(reply_tokens: u32) -> u32 {
+    PROMPT_SCAFFOLD_TOKENS + reply_tokens
+}
+
+/// The model context (llama-server `ctx-size`) one call with `context_tokens` of evidence takes: the
+/// evidence, the reply room of a summary for that budget (the longer of the two reply kinds), the
+/// prompt scaffold and the empty request line as [`evidence_budget`] counts it, rounded up to a
+/// multiple of 1,024. `None` up to the default budget: the contexts of the profiles were sized for it
+/// (8,192 holds 6,000 + 1,500 + 700 but for a few tokens), and a default install loads its models as
+/// before.
+///
+/// The engine's presets (`engine::presets::chat_context`) load a chat model at least this large — up
+/// to what the model takes — and [`reply_limit`] / [`evidence_budget`] are written with the same two
+/// helpers, so that a summary gets the whole budget and its whole reply in a context of this size.
+pub fn context_needed(context_tokens: u32) -> Option<u32> {
+    if context_tokens <= DEFAULT_CONTEXT_TOKENS {
+        return None;
+    }
+    let reply = reply_wanted(context_tokens, MAX_SUMMARY_TOKENS);
+    let tokens = context_tokens.saturating_add(fixed_room(reply)).saturating_add(prompt_cost(""));
+    Some(tokens.div_ceil(1_024).saturating_mul(1_024))
+}
+
 /// How long a reply may get: the fixed limit at the default evidence budget, more when the user
-/// raises the budget (an answer a fifth of it, a summary a quarter, up to four times the default) and
-/// never more than a third of the loaded model's context.
+/// raises the budget ([`reply_wanted`]) and never more than a third of the loaded model's context.
 ///
 /// User report 2026-11-17: "토큰 많이 설정했는데 출력이 너무 짧음" — 근거 토큰 예산 24,000 only let
 /// more evidence in; the reply stayed at 1,200 / 1,500 tokens and the prompts asked for a short one.
 fn reply_limit(deps: &AnswerDeps<'_>, req: &AnswerRequest, base: u32) -> u32 {
-    let share = if base >= MAX_SUMMARY_TOKENS { 4 } else { 5 };
-    let wanted = (req.context_tokens / share).clamp(base, base * 4);
-    match deps.context_size {
+    reply_room(req.context_tokens, base, deps.context_size)
+}
+
+/// [`reply_limit`] in numbers: what the budget asks for, within a third of the model's context when
+/// it is known (a context too small for the default reply keeps the default, or half of itself).
+fn reply_room(context_tokens: u32, base: u32, context_size: Option<u32>) -> u32 {
+    let wanted = reply_wanted(context_tokens, base);
+    match context_size {
         Some(ctx) => wanted.min((ctx / 3).max(base.min(ctx / 2))),
         None => wanted,
+    }
+}
+
+/// [`evidence_budget`] in numbers: the configured budget, or what the model's context leaves after
+/// `fixed` (the scaffold, the reply and the request's own blocks) when that is less.
+fn evidence_room(context_tokens: u32, context_size: Option<u32>, fixed: u32) -> u32 {
+    let budget = match context_size {
+        Some(ctx) => context_tokens.min(ctx.saturating_sub(fixed)),
+        None => context_tokens,
+    };
+    budget.max(MIN_EVIDENCE_TOKENS)
+}
+
+/// The error of a request the server refuses for its size once nothing is left to cut: the same
+/// error with the reason code [`EVIDENCE_TOO_LARGE`] in front, so that the user reads what to do.
+fn too_large(e: CoreError) -> CoreError {
+    match e {
+        CoreError::Engine(m) if !m.starts_with(EVIDENCE_TOO_LARGE) => {
+            CoreError::Engine(format!("{EVIDENCE_TOO_LARGE}: {m}"))
+        }
+        other => other,
+    }
+}
+
+/// [`too_large`] for an error that is a context overflow; any other error as it came.
+fn sized(e: CoreError) -> CoreError {
+    if context_overflow(&e) {
+        too_large(e)
+    } else {
+        e
     }
 }
 
@@ -207,7 +288,7 @@ fn clamp_request(req: &AnswerRequest) -> AnswerRequest {
     let max_question = if is_text_only(&r) { usize::MAX } else { MAX_QUESTION_CHARS };
     r.question = r.question.trim().chars().take(max_question).collect();
     r.selection = r.selection.as_ref().map(|s| s.trim().chars().take(MAX_QUESTION_CHARS).collect());
-    r.keep_chunks.truncate(32);
+    r.keep_chunks.truncate(*TOP_K_RANGE.end() as usize);
     // History: the last turns only, each shortened and stripped of prompt-structure lines.
     let skip = r.history.len().saturating_sub(MAX_HISTORY_TURNS);
     r.history = r
@@ -730,9 +811,11 @@ pub fn retrieve(deps: &AnswerDeps<'_>, req: &AnswerRequest) -> Result<Vec<(Searc
             query,
             mode: SearchMode::Hybrid,
             scope,
-            limit: (req.top_k * 2).clamp(4, 60),
+            limit: (req.top_k * 2).clamp(4, TOPIC_PASSAGES_MAX),
             expand_glossary: true,
-            per_document: 4,
+            // (four passages of a document at the default of eight; a larger 근거 청크 수 lets more of
+            // one document in — a fixed four made every value above it useless inside a single document)
+            per_document: (req.top_k / 2).max(4),
         };
         let resp = search(&deps.search, &sreq)?;
         for h in resp.hits.into_iter().filter(|h| is_evidence(h, min_similarity)) {
@@ -993,21 +1076,20 @@ fn prompt_cost(text: &str) -> u32 {
 /// model's context minus the reply, the prompt scaffolding and the question / selection / history /
 /// screen blocks that travel with the request.
 fn evidence_budget(deps: &AnswerDeps<'_>, req: &AnswerRequest, reply_tokens: u32, lang: Lang) -> u32 {
-    let mut budget = req.context_tokens;
-    if let Some(ctx) = deps.context_size {
-        let mut fixed = PROMPT_SCAFFOLD_TOKENS + reply_tokens + prompt_cost(&req.question);
-        if let Some(sel) = req.selection.as_deref() {
-            fixed += prompt_cost(sel);
-        }
-        if let Some(h) = history_block(req, lang) {
-            fixed += prompt_cost(&h);
-        }
-        if let Some(s) = session_block(req, lang) {
-            fixed += prompt_cost(&s);
-        }
-        budget = budget.min(ctx.saturating_sub(fixed));
+    if deps.context_size.is_none() {
+        return evidence_room(req.context_tokens, None, 0);
     }
-    budget.max(MIN_EVIDENCE_TOKENS)
+    let mut fixed = fixed_room(reply_tokens) + prompt_cost(&req.question);
+    if let Some(sel) = req.selection.as_deref() {
+        fixed += prompt_cost(sel);
+    }
+    if let Some(h) = history_block(req, lang) {
+        fixed += prompt_cost(&h);
+    }
+    if let Some(s) = session_block(req, lang) {
+        fixed += prompt_cost(&s);
+    }
+    evidence_room(req.context_tokens, deps.context_size, fixed)
 }
 
 /// System prompt for a request that brings its own text (다듬기 · 교정 · 번역 · 정리): nothing is looked
@@ -1368,8 +1450,11 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
                     input_cut = true;
                     shrunk = Some(shorter);
                 }
+                // (the text the user sent is what does not fit: the evidence budget has no part in it)
                 None => return Err(e),
             },
+            // A single source the context still cannot hold: nothing is left to cut.
+            Err(e) if context_overflow(&e) && req.retrieve => return Err(too_large(e)),
             Err(e) => return Err(e),
         }
     };
@@ -1406,11 +1491,16 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
     Ok(out)
 }
 
+/// Most items / sentences a summary is asked for, however large the reply room (1.0.6: 60 / 120; they
+/// were 20 — 30 for several documents — and 40, which a budget above 24,000 could not use).
+const SUMMARY_ITEMS_MAX: u32 = 60;
+const SUMMARY_SENTENCES_MAX: u32 = 120;
+
 /// What a summary is asked to be. The number of items / sentences follows the reply limit: 5 items or
 /// about 10 sentences at the default, more when the user raised the evidence budget ([`reply_limit`]).
 fn summary_instruction(mode: SummaryMode, lang: Lang, reply_tokens: u32) -> String {
-    let items = (reply_tokens / 300).clamp(5, 20);
-    let sentences = (reply_tokens / 150).clamp(10, 40);
+    let items = (reply_tokens / 300).clamp(5, SUMMARY_ITEMS_MAX);
+    let sentences = (reply_tokens / 150).clamp(10, SUMMARY_SENTENCES_MAX);
     match (mode, lang) {
         (SummaryMode::OneLine, Lang::Ko) => "문서 전체를 한 문장으로 요약하세요.".into(),
         (SummaryMode::KeyPoints, Lang::Ko) => format!(
@@ -1489,8 +1579,8 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
 /// "**개발용역계약서.txt 요약**" and "**정보보안지침.txt 요약**" one after the other, and a "상충:"
 /// paragraph about two documents that merely speak of different things.
 fn documents_instruction(count: usize, mode: SummaryMode, lang: Lang, reply_tokens: u32) -> String {
-    let items = (reply_tokens / 150).clamp(8, 30);
-    let sentences = (reply_tokens / 150).clamp(10, 40);
+    let items = (reply_tokens / 150).clamp(8, SUMMARY_ITEMS_MAX);
+    let sentences = (reply_tokens / 150).clamp(10, SUMMARY_SENTENCES_MAX);
     let detailed = detailed(reply_tokens, MAX_SUMMARY_TOKENS);
     match (mode, lang) {
         (SummaryMode::OneLine, Lang::Ko) => format!("문서 {count}건의 내용을 통틀어 한두 문장으로 요약하세요."),
@@ -1822,7 +1912,7 @@ fn summarize_rows_stepwise(
                     texts[a] = texts[a].chars().take(keep).collect();
                     queue.push_front((a, b));
                 } else {
-                    return Err(e);
+                    return Err(too_large(e));
                 }
                 log::info!("summary: prompt exceeded the context; splitting sources {}..{}", a + 1, b);
             }
@@ -1910,7 +2000,7 @@ fn summarize_rows_stepwise(
                         let cut: Vec<String> =
                             parts.iter().map(|p| p.chars().take(p.chars().count() / 2).collect()).collect();
                         if cut.iter().any(|c: &String| c.chars().count() < 200) {
-                            return Err(e);
+                            return Err(too_large(e));
                         }
                         queue.push_front(cut);
                     }
@@ -2002,7 +2092,7 @@ pub fn summarize_topic(
     }
     let lang = detect_lang(req);
     let ko = lang == Lang::Ko;
-    let limit = (req.top_k * 2).clamp(8, 64);
+    let limit = (req.top_k * 2).clamp(8, TOPIC_PASSAGES_MAX);
     let sreq = SearchRequest {
         query: topic.clone(),
         mode: SearchMode::Hybrid,
@@ -2164,7 +2254,7 @@ pub fn compare(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn Fn
                 texts.pop();
                 log::info!("compare: prompt exceeded the context; retrying with {} sources", sources.len());
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(sized(e)),
         }
     };
     let text = without_empty_conflicts(resp.content.trim());
@@ -2193,6 +2283,110 @@ pub fn compare(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn Fn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.0.6: the context the engine loads a model with for an evidence budget ([`context_needed`],
+    /// used by `engine::presets::chat_context`) and what an answer / a summary takes of a context
+    /// (`reply_room`, `evidence_room`) are the same arithmetic: in a context of the needed size a
+    /// summary gets the whole budget and its whole reply.
+    #[test]
+    fn a_context_of_the_needed_size_holds_the_budget_and_its_reply() {
+        // Up to the default budget nothing is asked of the engine: the profiles' contexts stay.
+        for budget in [*CONTEXT_TOKENS_RANGE.start(), 3_000, DEFAULT_CONTEXT_TOKENS] {
+            assert_eq!(context_needed(budget), None, "{budget}");
+        }
+        assert_eq!(DEFAULT_CONTEXT_TOKENS, AnswerRequest::question("").context_tokens);
+        assert_eq!(DEFAULT_CONTEXT_TOKENS, crate::settings::KnowledgeSettings::default().context_tokens);
+        for (budget, needed) in [
+            (6_001, 9_216),
+            (8_000, 11_264),
+            (24_000, 30_720),
+            (60_000, 75_776),
+            (200_000, 250_880),
+            (*CONTEXT_TOKENS_RANGE.end(), 328_704),
+        ] {
+            let ctx = context_needed(budget).unwrap();
+            assert_eq!(ctx, needed, "{budget}");
+            assert_eq!(ctx % 1_024, 0);
+            // A summary: its whole reply (a quarter of the budget) and the whole budget.
+            let reply = reply_room(budget, MAX_SUMMARY_TOKENS, Some(ctx));
+            assert_eq!(reply, (budget / 4).max(MAX_SUMMARY_TOKENS), "{budget}");
+            let request_line = prompt_cost("");
+            assert_eq!(evidence_room(budget, Some(ctx), fixed_room(reply) + request_line), budget, "{budget}");
+            // (… and no smaller multiple of 1,024 would hold them)
+            assert!(budget + fixed_room(reply) + request_line > ctx - 1_024, "{budget}");
+            // An answer: its reply is a fifth, which leaves the question its room.
+            let reply = reply_room(budget, MAX_ANSWER_TOKENS, Some(ctx));
+            assert_eq!(reply, (budget / 5).max(MAX_ANSWER_TOKENS), "{budget}");
+            let question = prompt_cost("출장비 정산 기준과 증빙 서류는 무엇인가요?");
+            assert_eq!(evidence_room(budget, Some(ctx), fixed_room(reply) + question), budget, "{budget}");
+        }
+    }
+
+    /// 1.0.6: the reply follows the budget without a ceiling of its own (it stopped at four times the
+    /// default: 4,800 / 6,000 tokens); the shares and the third of the model's context stay.
+    #[test]
+    fn the_reply_room_has_no_ceiling_but_the_models_context() {
+        // The default budget: the fixed limits.
+        assert_eq!(reply_room(6_000, MAX_ANSWER_TOKENS, None), 1_200);
+        assert_eq!(reply_room(6_000, MAX_SUMMARY_TOKENS, None), 1_500);
+        assert_eq!(reply_room(1_000, MAX_SUMMARY_TOKENS, Some(8_192)), 1_500);
+        // What four times the default used to allow at most …
+        assert_eq!(reply_room(24_000, MAX_ANSWER_TOKENS, None), 4_800);
+        assert_eq!(reply_room(24_000, MAX_SUMMARY_TOKENS, None), 6_000);
+        // … and beyond: a fifth / a quarter of the budget.
+        assert_eq!(reply_room(60_000, MAX_ANSWER_TOKENS, None), 12_000);
+        assert_eq!(reply_room(60_000, MAX_SUMMARY_TOKENS, None), 15_000);
+        assert_eq!(reply_room(200_000, MAX_SUMMARY_TOKENS, None), 50_000);
+        assert_eq!(reply_room(60_000, MAX_SUMMARY_TOKENS, Some(75_776)), 15_000);
+        // Never more than a third of the model's context.
+        assert_eq!(reply_room(200_000, MAX_SUMMARY_TOKENS, Some(131_072)), 43_690);
+        assert_eq!(reply_room(60_000, MAX_ANSWER_TOKENS, Some(16_384)), 5_461);
+        assert_eq!(reply_room(24_000, MAX_ANSWER_TOKENS, Some(3_000)), 1_200);
+        // The evidence takes what the context leaves, and never less than a passage or two.
+        assert_eq!(evidence_room(200_000, Some(131_072), fixed_room(43_690)), 131_072 - 700 - 43_690);
+        assert_eq!(evidence_room(200_000, None, 0), 200_000);
+        assert_eq!(evidence_room(60_000, Some(2_048), fixed_room(1_024)), MIN_EVIDENCE_TOKENS);
+    }
+
+    /// 1.0.6: the items / sentences a summary is asked for keep growing with the reply room.
+    #[test]
+    fn a_summary_is_asked_for_more_as_the_reply_room_grows() {
+        let ask = |mode, reply| summary_instruction(mode, Lang::Ko, reply);
+        assert!(ask(SummaryMode::KeyPoints, 1_500).contains("5개 이내"));
+        assert!(ask(SummaryMode::KeyPoints, 6_000).contains("20개 이내"));
+        assert!(ask(SummaryMode::KeyPoints, 15_000).contains("50개 이내"));
+        assert!(ask(SummaryMode::KeyPoints, 50_000).contains("60개 이내"));
+        assert!(ask(SummaryMode::OnePage, 1_500).contains("한 쪽 분량(10문장 내외)"));
+        assert!(ask(SummaryMode::OnePage, 6_000).contains("(40문장 내외)"));
+        assert!(ask(SummaryMode::OnePage, 15_000).contains("(100문장 내외)"));
+        assert!(ask(SummaryMode::OnePage, 50_000).contains("(120문장 내외)"));
+        assert!(summary_instruction(SummaryMode::KeyPoints, Lang::En, 50_000).contains("at most 60 bullet items"));
+        // One summary of several documents: twice the items per token, the same ceilings.
+        let several = |mode, reply| documents_instruction(3, mode, Lang::Ko, reply);
+        assert!(several(SummaryMode::KeyPoints, 1_500).contains("10개 이내"));
+        assert!(several(SummaryMode::KeyPoints, 6_000).contains("40개 이내"));
+        assert!(several(SummaryMode::KeyPoints, 50_000).contains("60개 이내"));
+    }
+
+    /// 1.0.6: a request the model's context cannot hold once nothing is left to cut tells the user what
+    /// to do — and is still the context overflow the callers know.
+    #[test]
+    fn a_request_too_large_for_the_context_carries_its_reason_code() {
+        let refused =
+            || CoreError::engine("HTTP 400: request (9000 tokens) exceeds the available context size (8192 tokens)");
+        let e = too_large(refused());
+        assert!(context_overflow(&e));
+        assert_eq!(
+            e.to_string(),
+            "engine error: evidence_too_large: HTTP 400: request (9000 tokens) exceeds the available context size (8192 tokens)"
+        );
+        // (the code is put in front once)
+        assert_eq!(too_large(too_large(refused())).to_string(), e.to_string());
+        assert_eq!(sized(refused()).to_string(), e.to_string());
+        // Any other error stays as it came.
+        assert_eq!(sized(CoreError::engine("HTTP 500: boom")).to_string(), "engine error: HTTP 500: boom");
+        assert_eq!(sized(CoreError::Cancelled).to_string(), CoreError::Cancelled.to_string());
+    }
 
     #[test]
     fn parses_sentences_markers_and_conflicts() {

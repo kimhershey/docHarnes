@@ -1017,6 +1017,7 @@
         "stopping": "Stopping"
       },
       "degraded_hint": "The engine kept crashing and restarts were stopped. Switch to a smaller quantisation/context or the CPU backend, then restart.",
+      "degraded_budget_hint": "The evidence token budget is set to {{tokens}} (default 6,000), so the model is loaded with a context that large. It may have run out of memory: lower the evidence token budget under Settings ▸ Reference material, then restart.",
       "last_error": "Last error",
       "not_found": "llama-server binary not found ({{error}})",
       "install_hint": "Install it under engines\\<version>\\<pack>\\ with the script in engines/README.md, or point to a binary below.",
@@ -1249,9 +1250,11 @@
       "allow_general": "Allow general-knowledge answers when there is no evidence",
       "allow_general_hint": "Off by default (prevents hallucination). Such answers are labelled 'general knowledge'.",
       "context_tokens": "Evidence token budget",
-      "context_tokens_hint": "How much evidence one answer carries. A larger budget also makes answers and summaries longer and more detailed (an answer up to a fifth of it, a summary a quarter, within a third of the model's context). At the default of 6,000 answers are short, as before.",
+      "context_tokens_hint": "How much evidence one answer or summary carries. A larger budget also makes answers and summaries longer and more detailed (an answer a fifth of it, a summary a quarter, within a third of the model's context). Above the default of 6,000 the model is loaded with a context large enough for the budget (up to what the model supports). Larger budgets need more VRAM / RAM and take longer. A change applies when the engine is restarted and the model is loaded again. If loading the model or answering fails, lower this value.",
+      "context_loaded": "Context of the loaded model ({{model}}): {{tokens}} tokens",
       "top_k": "Evidence chunks",
       "chunk_target": "Chunk size (tokens)",
+      "chunk_target_hint": "It cannot go above 2,000: every chunk has to fit the embedding model's context (2,048 tokens).",
       "min_similarity": "Semantic evidence threshold (cosine similarity)",
       "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (0.5 for EmbeddingGemma 2 — tune on your PC)."
     },
@@ -1396,7 +1399,8 @@
       "edit_cells_unaddressed": "This sheet is stored without an address on every cell, so cell values are not changed. Save the file once in Excel and import it again.",
       "edit_picture_missing": "This picture was not found in the file. Close the dialog and open it again to read the list of pictures anew.",
       "edit_picture_format": "A picture of this format (EMF, WMF, SVG …) cannot be replaced. Only PNG, JPEG, GIF and BMP pictures are.",
-      "edit_picture_unreadable": "The new picture file could not be read. Check the path, that it is a PNG, JPEG, GIF, BMP, WebP or TIFF file, and that it is 50 MB or smaller."
+      "edit_picture_unreadable": "The new picture file could not be read. Check the path, that it is a PNG, JPEG, GIF, BMP, WebP or TIFF file, and that it is 50 MB or smaller.",
+      "evidence_too_large": "The request does not fit the model's context, even after it was retried with less evidence. Lower the evidence token budget under Settings ▸ Reference material and try again. If you have just raised the budget, restart the engine so the model is loaded again."
     }
   },
   "startup": {
@@ -1524,7 +1528,9 @@
       "findings_not_in_run": "The selected results are not part of the last stored check. Run the check again.",
       "document_not_found": "Document not found.",
       "no_fields": "No fields were found in the sample documents. Check that they carry text.",
-      "no_vision_projector": "The model has no vision projector (mmproj) file, so page images cannot be read. Load a model that comes with its projector file on the Models screen and run this again. The documents that were not processed were left as they were."
+      "no_vision_projector": "The model has no vision projector (mmproj) file, so page images cannot be read. Load a model that comes with its projector file on the Models screen and run this again. The documents that were not processed were left as they were.",
+      "evidence_too_large": "The request does not fit the model's context, even after it was retried with less evidence. Lower the evidence token budget under Settings ▸ Reference material and try again (restart the engine if you have just raised it).",
+      "context_budget_load_failed": "The model could not be loaded. Its context was set to {{tokens}} tokens to hold the evidence token budget, which may not fit this PC's VRAM / RAM. Lower the evidence token budget under Settings ▸ Reference material, restart the engine and load the model again."
     },
     "result_loading": "Loading result…"
   },

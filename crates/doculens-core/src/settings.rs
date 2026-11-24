@@ -380,11 +380,13 @@ pub struct KnowledgeSettings {
     pub latest_only: bool,
     /// Let the model answer from general knowledge when the knowledge base has no evidence.
     pub allow_general_knowledge: bool,
-    /// Token budget for evidence chunks in one answer.
+    /// Token budget for evidence chunks in one answer (1,000 – 262,144; the engine loads the chat
+    /// model with a context that holds it, see `engine::presets::chat_context`).
     pub context_tokens: u32,
-    /// Max evidence chunks per answer.
+    /// Max evidence chunks per answer (1 – 200).
     pub top_k: u32,
-    /// Target chunk size in tokens (400–800 per design).
+    /// Target chunk size in tokens (400–800 per design; 120 – 2,000, bounded by the embedding
+    /// model's context).
     pub chunk_target_tokens: u32,
     /// Vector-only hits below this cosine similarity are not evidence (≈ 0.5 for the
     /// shipped embedding model, EmbeddingGemma 2; re-check on the user's PC after a model change).
@@ -410,8 +412,15 @@ impl Default for KnowledgeSettings {
 impl KnowledgeSettings {
     /// Keeps the knobs inside the ranges the answer / chunker code supports.
     pub fn normalize(&mut self) {
-        self.context_tokens = self.context_tokens.clamp(1_000, 24_000);
-        self.top_k = self.top_k.clamp(1, 32);
+        // 1.0.6 (user decision 2026-11-24): the budget and the passage count go as far as the answer
+        // code takes them — a budget up to the largest context a model of the registry has. What a PC
+        // or a model cannot hold fails and is reported with the advice to lower the budget.
+        let (budget, passages) =
+            (crate::knowledge::answer::CONTEXT_TOKENS_RANGE, crate::knowledge::answer::TOP_K_RANGE);
+        self.context_tokens = self.context_tokens.clamp(*budget.start(), *budget.end());
+        self.top_k = self.top_k.clamp(*passages.start(), *passages.end());
+        // The chunk size is not a limit of policy: a chunk has to fit the embedding model's context
+        // (2,048 tokens), and a chunk may come out 1.6 times its target.
         self.chunk_target_tokens = self.chunk_target_tokens.clamp(120, 2_000);
         if !self.min_vector_similarity.is_finite() {
             self.min_vector_similarity = 0.5;

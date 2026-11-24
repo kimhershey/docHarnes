@@ -14,6 +14,7 @@ import { useEngineBinaryInfo } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import type { EngineDevice, EngineState } from "@/lib/types";
 import { describeError } from "@/lib/errors";
+import { DEFAULT_CONTEXT_TOKENS } from "@/lib/evidenceContext";
 import { isComposing } from "@/lib/shortcuts";
 import { formatBytes, formatMiB } from "@/lib/utils";
 import { useEngineStore } from "@/stores/engine";
@@ -181,6 +182,12 @@ export function EngineCard() {
         {state?.kind === "degraded" && (
           <div className="rounded-md border border-danger bg-danger-soft p-3 text-sm">
             <p className="font-medium text-danger">{t("models.engine_card.degraded_hint")}</p>
+            {/* 1.0.6: an evidence budget above the default loads the model with a larger context — the likeliest thing to lower. */}
+            {settings.knowledge.context_tokens > DEFAULT_CONTEXT_TOKENS && (
+              <p className="font-medium text-danger" data-testid="engine-degraded-budget">
+                {t("models.engine_card.degraded_budget_hint", { tokens: settings.knowledge.context_tokens.toLocaleString("en-US") })}
+              </p>
+            )}
             <p className="text-fg-muted selectable">{state.reason}</p>
           </div>
         )}

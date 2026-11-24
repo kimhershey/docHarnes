@@ -153,6 +153,8 @@ fn summaries_of_real_text_under_given_settings() {
         settings: &settings,
         active_model: None,
         debug: false,
+        // As the app does: the model is loaded with a context that holds the largest budget of the run.
+        evidence_tokens: budgets.iter().copied().max().unwrap_or(6_000),
     };
     let build = presets::build_presets(&registry, &discovered, &ctx);
     let presets_path = appdata.path().join("presets.ini");

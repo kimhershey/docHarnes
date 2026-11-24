@@ -168,6 +168,7 @@ impl RunningEngine {
             settings: &settings,
             active_model: None,
             debug: false,
+            evidence_tokens: doculens_core::knowledge::answer::DEFAULT_CONTEXT_TOKENS,
         };
         let build = presets::build_presets(&registry, &discovered, &pctx);
         if let Some((_, reason)) = build.skipped.iter().find(|(id, _)| *id == model.id) {

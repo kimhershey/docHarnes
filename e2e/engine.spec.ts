@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-import { createWorkspace, freshApp, openModelsAdvanced } from "./helpers";
+import ko from "../src/i18n/ko.json" with { type: "json" };
+import { createWorkspace, freshApp, openModelsAdvanced, openSettingsTab } from "./helpers";
 
 // P1 acceptance (design §4.1): engine lifecycle, model import / download /
 // load and the job list, driven against the browser mock backend (the real
@@ -94,5 +95,55 @@ test.describe("P1 engine & models", () => {
     await openModelsAdvanced(page);
     await expect(page.getByTestId("engine-card")).toContainText("Engine (llama-server)");
     await expect(page.getByTestId("statusbar-engine")).toContainText("AI engine:");
+  });
+
+  // 1.0.6 (user decision 2026-11-24): the limits are off the evidence settings — 근거 토큰 예산 goes up to the largest
+  // context a model takes and the model is loaded with a context that holds it; the chunk size stays, with its reason.
+  test("the evidence budget goes above 24,000 and the model is loaded with a context that holds it", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page, undefined, { finish: false });
+    await page.getByTestId("onboarding-finish").click();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+
+    await openSettingsTab(page, "reference");
+    const budget = page.getByTestId("kb-context_tokens");
+    await expect(budget).toHaveValue("6000");
+    await expect(budget).toHaveAttribute("max", "262144");
+    await budget.fill("60000");
+    await budget.blur();
+    await expect(budget).toHaveValue("60000");
+    const passages = page.getByTestId("kb-top_k");
+    await expect(passages).toHaveAttribute("max", "200");
+    await passages.fill("150");
+    await passages.blur();
+    await expect(passages).toHaveValue("150");
+    // The chunk size keeps its range: a chunk has to fit the embedding model's context — the hint says so.
+    const chunk = page.getByTestId("kb-chunk_target_tokens");
+    await chunk.fill("5000");
+    await chunk.blur();
+    await expect(chunk).toHaveValue("2000");
+    const knowledge = page.getByTestId("settings-knowledge");
+    await expect(knowledge).toContainText(ko.settings.knowledge.chunk_target_hint);
+    await expect(knowledge).toContainText("이 값을 낮추세요");
+    await expect(page.getByTestId("kb-context-loaded")).toHaveCount(0);
+
+    // The preset of a chat model: 60,000 of evidence + a quarter for a summary's reply + the scaffold, in 1,024s.
+    await openModelsAdvanced(page);
+    await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
+    await page.getByTestId("models-import").click();
+    await page.getByTestId("import-paths").fill("D:\\usb\\gemma-4-E4B-it-Q5_K_M.gguf");
+    await page.getByTestId("import-validate").click();
+    await page.getByTestId("import-run").click();
+    await expect(page.getByTestId("discovered-gemma-4-e4b-it-q5_k_m")).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId("engine-card").getByRole("button", { name: ko.models.engine_card.presets }).click();
+    await expect(page.getByRole("dialog")).toContainText("ctx-size = 75776");
+    await page.keyboard.press("Escape");
+    await page.getByTestId("load-gemma4-e4b-q5km").click();
+    await expect(page.getByTestId("instance-gemma4-e4b-q5km")).toHaveText("로드됨", { timeout: 15_000 });
+
+    // … and the settings screen shows the context the loaded model runs with.
+    await openSettingsTab(page, "reference");
+    await expect(page.getByTestId("kb-context-loaded")).toContainText("75,776");
+    await expect(page.getByTestId("kb-context-loaded")).toContainText("gemma4-e4b-q5km");
   });
 });

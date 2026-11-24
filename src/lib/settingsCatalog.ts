@@ -96,6 +96,16 @@ export function settingSpec(key: string): SettingSpec | null {
   return SETTINGS_CATALOG.find((s) => s.key === path) ?? null;
 }
 
+/**
+ * The range of an integer setting, as the core's catalog has it — the settings screen takes the limits of
+ * its number fields from here instead of repeating them (the screen said 1–20 for a setting the core took to 32).
+ */
+export function integerRange(key: string): { min: number; max: number } {
+  const type = settingSpec(key)?.type;
+  if (type?.kind !== "integer") throw new Error(`${key} is not an integer setting`);
+  return { min: type.min, max: type.max };
+}
+
 const TRUE_WORDS = ["true", "1", "on", "yes", "y", "켜", "켬", "켜기", "켜줘", "사용", "허용", "enable", "enabled"];
 const FALSE_WORDS = ["false", "0", "off", "no", "n", "꺼", "끔", "끄기", "꺼줘", "사용안함", "해제", "disable", "disabled", "none"];
 

@@ -5291,7 +5291,7 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
         if (ctl) await ctl.checkpoint();
         progress("summarize", 0, 1, op.topic);
         const scope = { documents: idsOf(found), project_id: f.project_id ?? undefined, latest_only: settings.knowledge.latest_only, ...(f.role ? { roles: [f.role] } : {}) };
-        const got = (await mockKnowledge("knowledge_answer", { req: { question: op.topic, kind: "answer", scope, top_k: Math.min(64, Math.max(8, settings.knowledge.top_k * 2)), context_tokens: settings.knowledge.context_tokens, save: false }, requestId: `plan-${newId()}` })) as Answer;
+        const got = (await mockKnowledge("knowledge_answer", { req: { question: op.topic, kind: "answer", scope, top_k: Math.min(400, Math.max(8, settings.knowledge.top_k * 2)), context_tokens: settings.knowledge.context_tokens, save: false }, requestId: `plan-${newId()}` })) as Answer;
         const ans: Answer = { ...got, kind: "summary", question: op.topic };
         const cited = [...new Set(ans.sources.map((s) => s.document_id))];
         const none = ans.no_evidence || ans.sources.length === 0;

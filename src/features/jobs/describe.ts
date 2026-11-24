@@ -148,6 +148,8 @@ const ERROR_CODES: Record<string, string> = {
   findings_not_in_run: "jobs.error.findings_not_in_run",
   document_not_found: "jobs.error.document_not_found",
   no_fields: "jobs.error.no_fields",
+  // 1.0.6: a summary / answer the model's context cannot hold even after the retries (`knowledge::answer::EVIDENCE_TOO_LARGE`).
+  evidence_too_large: "jobs.error.evidence_too_large",
 };
 
 function describeErrorText(raw: string, t: TFunction): string {
@@ -157,6 +159,9 @@ function describeErrorText(raw: string, t: TFunction): string {
   if (key) return t(key);
   let m = text.match(/^schema_not_found(?::\s*(.*))?$/);
   if (m) return t("jobs.error.schema_not_found", { name: m[1]?.trim() || "?" });
+  // 1.0.6: a model whose context 근거 토큰 예산 raised above the profile's did not load (`engine_bridge::load_error`).
+  m = text.match(/^context_budget_load_failed: ctx-size (\d+)/);
+  if (m) return t("jobs.error.context_budget_load_failed", { tokens: Number(m[1]).toLocaleString("en-US") });
   // Plan workers report "<op>: <reason>" (`planner_bridge.rs`): translate the op and recurse on the reason.
   m = text.match(/^([a-z_]+):\s*(.*)$/s);
   if (m && (OP_KINDS as readonly string[]).includes(m[1]!)) return t("jobs.error.step", { op: t(`planner.ops.${m[1] as OpKind}`), message: describeErrorText(m[2]!, t) || t("jobs.state.failed") });

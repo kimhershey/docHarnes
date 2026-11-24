@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::hw::{Backend, Tier};
+use crate::knowledge::answer::context_needed;
 use crate::modelstore::DiscoveredModel;
 use crate::pipeline::image::VisionGeometry;
 use crate::registry::{ModelEntry, ModelRole, Registry};
@@ -89,6 +90,9 @@ pub struct PresetContext<'a> {
     /// Model loaded at startup (`load-on-startup = true`).
     pub active_model: Option<&'a str>,
     pub debug: bool,
+    /// 근거 토큰 예산 (`knowledge.context_tokens`): a chat model is loaded with a context that holds
+    /// it ([`chat_context`]). The default budget leaves every context as the profile gives it.
+    pub evidence_tokens: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -98,6 +102,10 @@ pub struct PresetBuild {
     pub skipped: Vec<(String, String)>,
     /// mmproj bytes per model id — the router's memory figures exclude them (§3.3.1).
     pub mmproj_sizes: BTreeMap<String, u64>,
+    /// Models whose `ctx-size` the evidence budget raised above what the profile gives, with that
+    /// size: a load of one of them that fails is reported with the advice to lower the budget.
+    #[serde(default)]
+    pub budget_contexts: BTreeMap<String, u64>,
 }
 
 fn num(v: &serde_json::Value, key: &str) -> Option<u64> {
@@ -125,6 +133,26 @@ pub fn context_for(defaults: &serde_json::Value, ctx_max: u64, profile: Profile,
     ctx.max(2_048)
 }
 
+/// Context a chat model is loaded with (1.0.6, user decision 2026-11-24: no limits on the evidence
+/// settings — what fails is reported): what the profile and backend give ([`context_for`]), or what
+/// one call with `evidence_tokens` of evidence takes ([`context_needed`]) when that is more. Only the
+/// model's own maximum holds it down — the Balanced / Speed / CPU sizes are starting points, not
+/// ceilings. With the default budget this is `context_for`.
+pub fn chat_context(
+    defaults: &serde_json::Value,
+    ctx_max: u64,
+    profile: Profile,
+    backend: Backend,
+    evidence_tokens: u32,
+) -> u64 {
+    let by_profile = context_for(defaults, ctx_max, profile, backend);
+    let Some(needed) = context_needed(evidence_tokens) else {
+        return by_profile;
+    };
+    let needed = if ctx_max > 0 { u64::from(needed).min(ctx_max) } else { u64::from(needed) };
+    by_profile.max(needed)
+}
+
 /// Image token ceiling (design §3.4 render budget).
 pub fn image_max_tokens_for(defaults: &serde_json::Value, profile: Profile, backend: Backend) -> u64 {
     let base = num(defaults, "image_max_tokens").unwrap_or(2_048);
@@ -142,7 +170,13 @@ pub fn image_max_tokens_for(defaults: &serde_json::Value, profile: Profile, back
     }
 }
 
-fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetContext) -> Vec<(String, String)> {
+/// The options of a model's section and, for a chat model whose context the evidence budget raised
+/// above the profile's, that context.
+fn model_options(
+    entry: Option<&ModelEntry>,
+    d: &DiscoveredModel,
+    ctx: &PresetContext,
+) -> (Vec<(String, String)>, Option<u64>) {
     let empty = serde_json::Value::Null;
     let defaults = entry.map(|e| &e.defaults).unwrap_or(&empty);
     let mut defaults = defaults.clone();
@@ -174,10 +208,13 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
         push(&mut opts, "batch-size", c.max(512).to_string());
         push(&mut opts, "ubatch-size", c.max(512).to_string());
         push(&mut opts, "n-gpu-layers", num(&defaults, "n_gpu_layers").unwrap_or(0).to_string());
-        return opts;
+        return (opts, None);
     }
 
-    push(&mut opts, "ctx-size", context_for(&defaults, ctx_max, ctx.profile, ctx.backend).to_string());
+    let by_profile = context_for(&defaults, ctx_max, ctx.profile, ctx.backend);
+    let context = chat_context(&defaults, ctx_max, ctx.profile, ctx.backend, ctx.evidence_tokens);
+    let raised = (context > by_profile).then_some(context);
+    push(&mut opts, "ctx-size", context.to_string());
     if d.has_vision {
         // The encoder geometry bounds both ends: Gemma 4 takes 70–1,120 tokens per image, Qwen
         // drop-ins need the 1,024-token grounding floor (§3.4).
@@ -227,7 +264,7 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
         // "audit mode": ViT on the CPU (CUDA FA vision drift work-around, §3.3.2)
         push(&mut opts, "mmproj-offload", "false".into());
     }
-    opts
+    (opts, raised)
 }
 
 /// Gemma 4 E2B / E4B (hidden size 1,536 / 2,560) keep causal attention on image tokens; every
@@ -294,8 +331,11 @@ pub fn build_presets(registry: &Registry, discovered: &[DiscoveredModel], ctx: &
         }
         let entry = registry.get(&id);
         // Every value comes from registry defaults or `model.json`; the INI has no escaping.
-        let options: Vec<(String, String)> =
-            model_options(entry, d, ctx).into_iter().filter(|(_, v)| ini_value_ok(v)).collect();
+        let (options, raised) = model_options(entry, d, ctx);
+        let options: Vec<(String, String)> = options.into_iter().filter(|(_, v)| ini_value_ok(v)).collect();
+        if let Some(context) = raised {
+            build.budget_contexts.insert(id.clone(), context);
+        }
         if let Some(mm) = &d.mmproj {
             build.mmproj_sizes.insert(id.clone(), mm.size);
         }
@@ -314,6 +354,7 @@ pub fn build_presets(registry: &Registry, discovered: &[DiscoveredModel], ctx: &
 mod tests {
     use super::*;
     use crate::gguf::{synthetic_gemma4_metadata, write_minimal_gguf, GgufValue};
+    use crate::knowledge::answer::{CONTEXT_TOKENS_RANGE, DEFAULT_CONTEXT_TOKENS};
     use crate::modelstore::{scan_models_dir, ScanOptions};
 
     fn fixture(dir: &Path) -> Vec<DiscoveredModel> {
@@ -362,6 +403,7 @@ mod tests {
             settings: &settings,
             active_model: Some("gemma4-e4b-q6k"),
             debug: false,
+            evidence_tokens: DEFAULT_CONTEXT_TOKENS,
         };
         let b = build_presets(&Registry::builtin(), &found, &ctx);
         assert!(b.skipped.is_empty(), "{:?}", b.skipped);
@@ -392,6 +434,7 @@ mod tests {
             settings: &settings,
             active_model: None,
             debug: true,
+            evidence_tokens: DEFAULT_CONTEXT_TOKENS,
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
         assert!(
@@ -410,6 +453,7 @@ mod tests {
             settings: &settings,
             active_model: None,
             debug: false,
+            evidence_tokens: DEFAULT_CONTEXT_TOKENS,
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
         assert!(ini.contains("n-gpu-layers = 0\nbatch-size"));
@@ -449,6 +493,7 @@ mod tests {
             settings: &settings,
             active_model: None,
             debug: false,
+            evidence_tokens: DEFAULT_CONTEXT_TOKENS,
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
         // 1,120 image tokens → 1,152-token micro-batch (multiple of 64), batch stays 2,048
@@ -471,6 +516,188 @@ mod tests {
         assert_eq!(image_max_tokens_for(&defaults, Profile::FinePrint, Backend::Cu129), 3_072);
         assert_eq!(VisionGeometry::for_arch("qwen35").default_min_tokens, 1_024);
         assert_eq!(VisionGeometry::for_arch("gemma4").max_tokens, 1_120);
+    }
+
+    /// The `ctx-size` every chat model of the registry got before 1.0.6, per backend and profile.
+    /// (registry `ctx` → [accuracy, balanced, speed, fine_print] on a GPU; the CPU pack loads 8,192 at most.)
+    fn contexts_before_106(registry_ctx: u64, backend: Backend) -> [u64; 4] {
+        let gpu = match registry_ctx {
+            8_192 => [8_192, 8_192, 8_192, 8_192],
+            16_384 => [16_384, 16_384, 8_192, 16_384],
+            32_768 => [32_768, 16_384, 8_192, 32_768],
+            other => panic!("a registry ctx this table does not know: {other}"),
+        };
+        if backend == Backend::Cpu {
+            [8_192; 4]
+        } else {
+            gpu
+        }
+    }
+
+    const PROFILES: [Profile; 4] = [Profile::Accuracy, Profile::Balanced, Profile::Speed, Profile::FinePrint];
+    const BACKENDS: [Backend; 4] = [Backend::Cpu, Backend::Vulkan, Backend::Cu121, Backend::Cu129];
+
+    #[test]
+    fn the_profile_context_of_every_registry_model_is_pinned() {
+        let registry = Registry::builtin();
+        let mut chat_models = 0;
+        for m in registry.models.iter().filter(|m| m.role != ModelRole::Embedding) {
+            chat_models += 1;
+            let base = num(&m.defaults, "ctx").expect("registry ctx");
+            for backend in BACKENDS {
+                let expected = contexts_before_106(base, backend);
+                for (profile, want) in PROFILES.into_iter().zip(expected) {
+                    assert_eq!(
+                        context_for(&m.defaults, m.ctx_max, profile, backend),
+                        want,
+                        "{} {backend:?} {profile:?}",
+                        m.id
+                    );
+                }
+            }
+        }
+        assert!(chat_models >= 6, "{chat_models}");
+    }
+
+    /// 1.0.6: with the default evidence budget (and any smaller one) every backend / profile loads
+    /// every model with exactly the context it had — the budget only ever adds.
+    #[test]
+    fn the_default_evidence_budget_leaves_every_context_as_it_was() {
+        let registry = Registry::builtin();
+        for m in registry.models.iter().filter(|m| m.role != ModelRole::Embedding) {
+            let base = num(&m.defaults, "ctx").expect("registry ctx");
+            for backend in BACKENDS {
+                let expected = contexts_before_106(base, backend);
+                for (profile, want) in PROFILES.into_iter().zip(expected) {
+                    for budget in [*CONTEXT_TOKENS_RANGE.start(), 3_000, DEFAULT_CONTEXT_TOKENS] {
+                        assert_eq!(
+                            chat_context(&m.defaults, m.ctx_max, profile, backend, budget),
+                            want,
+                            "{} {backend:?} {profile:?} budget {budget}",
+                            m.id
+                        );
+                    }
+                    // … and no budget makes a context smaller, or larger than the model takes.
+                    for budget in [6_001, 24_000, 60_000, *CONTEXT_TOKENS_RANGE.end()] {
+                        let got = chat_context(&m.defaults, m.ctx_max, profile, backend, budget);
+                        assert!(got >= want && got <= m.ctx_max, "{} {backend:?} {profile:?} {budget}: {got}", m.id);
+                    }
+                }
+            }
+        }
+        // The same through the preset file: the E4B fixture on cpu / vulkan / cuda × speed / balanced / accuracy.
+        let tmp = tempfile::tempdir().unwrap();
+        let found = fixture(tmp.path());
+        let settings = ModelSettings::default();
+        let ctx_size = |backend: Backend, profile: Profile, evidence_tokens: u32| -> (u64, PresetBuild) {
+            let tier = if backend == Backend::Cpu { Tier::CpuOnly } else { Tier::Vram8gb };
+            let ctx = PresetContext {
+                backend,
+                tier,
+                profile,
+                settings: &settings,
+                active_model: None,
+                debug: false,
+                evidence_tokens,
+            };
+            let build = build_presets(&registry, &found, &ctx);
+            let ini = build.file.to_ini();
+            let e4b = ini.split("[gemma4-e4b-q6k]").nth(1).unwrap().split("\n[").next().unwrap().to_string();
+            let line = e4b.lines().find(|l| l.starts_with("ctx-size = ")).expect("ctx-size");
+            (line["ctx-size = ".len()..].parse().unwrap(), build)
+        };
+        for (backend, want) in [
+            (Backend::Cpu, [8_192, 8_192, 8_192]),
+            (Backend::Vulkan, [8_192, 16_384, 32_768]),
+            (Backend::Cu121, [8_192, 16_384, 32_768]),
+            (Backend::Cu129, [8_192, 16_384, 32_768]),
+        ] {
+            for (profile, want) in [Profile::Speed, Profile::Balanced, Profile::Accuracy].into_iter().zip(want) {
+                let (got, build) = ctx_size(backend, profile, DEFAULT_CONTEXT_TOKENS);
+                assert_eq!(got, want, "{backend:?} {profile:?}");
+                assert!(build.budget_contexts.is_empty(), "{:?}", build.budget_contexts);
+            }
+        }
+        // The embedding model is not a chat model: its context never follows the budget.
+        let ctx = PresetContext {
+            backend: Backend::Vulkan,
+            tier: Tier::Vram8gb,
+            profile: Profile::Balanced,
+            settings: &settings,
+            active_model: None,
+            debug: false,
+            evidence_tokens: *CONTEXT_TOKENS_RANGE.end(),
+        };
+        let ini = build_presets(&registry, &found, &ctx).file.to_ini();
+        assert!(ini.contains("embeddings = true\npooling = mean\nctx-size = 2048\n"), "{ini}");
+    }
+
+    /// 1.0.6 (user decision 2026-11-24): a larger evidence budget loads the model with a context that
+    /// holds it — the Balanced / Speed / CPU sizes do not hold it down, the model's maximum does.
+    #[test]
+    fn a_larger_evidence_budget_loads_the_model_with_a_context_that_holds_it() {
+        let registry = Registry::builtin();
+        let e4b = registry.get("gemma4-e4b-q6k").unwrap();
+        assert_eq!((num(&e4b.defaults, "ctx"), e4b.ctx_max), (Some(32_768), 131_072));
+        let ctx = |profile, backend, budget| chat_context(&e4b.defaults, e4b.ctx_max, profile, backend, budget);
+        // budget → (Balanced Vulkan, CPU)
+        for (budget, vulkan, cpu) in [
+            (6_000, 16_384, 8_192),
+            (8_000, 16_384, 11_264),
+            (24_000, 30_720, 30_720),
+            (60_000, 75_776, 75_776),
+            (200_000, 131_072, 131_072),
+            (262_144, 131_072, 131_072),
+        ] {
+            assert_eq!(ctx(Profile::Balanced, Backend::Vulkan, budget), vulkan, "vulkan {budget}");
+            assert_eq!(ctx(Profile::Balanced, Backend::Cpu, budget), cpu, "cpu {budget}");
+            assert_eq!(ctx(Profile::Speed, Backend::Cu129, budget), cpu, "speed {budget}");
+        }
+        // 60,000 of evidence, a quarter of it for the summary's reply and the scaffold all fit.
+        assert!(ctx(Profile::Balanced, Backend::Vulkan, 60_000) >= 60_000 + 15_000 + 700);
+        // The accuracy profile's 32,768 already holds a budget of 24,000; a larger one grows it too.
+        assert_eq!(ctx(Profile::Accuracy, Backend::Cu129, 24_000), 32_768);
+        assert_eq!(ctx(Profile::Accuracy, Backend::Cu129, 60_000), 75_776);
+        // The 12B takes 262,144: the largest budget asks for more than that and gets the maximum.
+        let big = registry.get("gemma4-12b-q4km").unwrap();
+        assert_eq!(chat_context(&big.defaults, big.ctx_max, Profile::Balanced, Backend::Cu129, 200_000), 250_880);
+        assert_eq!(chat_context(&big.defaults, big.ctx_max, Profile::Balanced, Backend::Cu129, 262_144), 262_144);
+        // A model whose maximum is not known (a drop-in without `context_length`) is not held down.
+        assert_eq!(chat_context(&serde_json::json!({}), 0, Profile::Balanced, Backend::Cu129, 60_000), 75_776);
+        // (a small drop-in keeps its own maximum)
+        assert_eq!(chat_context(&serde_json::json!({}), 4_096, Profile::Balanced, Backend::Cu129, 60_000), 4_096);
+
+        // In the preset file, with the models it was raised for.
+        let tmp = tempfile::tempdir().unwrap();
+        let found = fixture(tmp.path());
+        let settings = ModelSettings::default();
+        let pctx = PresetContext {
+            backend: Backend::Vulkan,
+            tier: Tier::Vram8gb,
+            profile: Profile::Balanced,
+            settings: &settings,
+            active_model: None,
+            debug: false,
+            evidence_tokens: 60_000,
+        };
+        let build = build_presets(&registry, &found, &pctx);
+        let ini = build.file.to_ini();
+        assert!(ini.contains("load-on-startup = false\nctx-size = 75776\nimage-min-tokens = 512\n"), "{ini}");
+        assert_eq!(build.budget_contexts.get("gemma4-e4b-q6k"), Some(&75_776));
+        assert_eq!(build.budget_contexts.len(), 1, "{:?}", build.budget_contexts);
+    }
+
+    /// The upper end of 근거 토큰 예산 is the largest context a model of the registry takes.
+    #[test]
+    fn the_largest_evidence_budget_is_the_largest_context_of_the_registry() {
+        let largest = Registry::builtin()
+            .models
+            .iter()
+            .filter(|m| m.role != ModelRole::Embedding)
+            .map(|m| m.ctx_max)
+            .max()
+            .unwrap();
+        assert_eq!(u64::from(*CONTEXT_TOKENS_RANGE.end()), largest);
     }
 
     #[test]

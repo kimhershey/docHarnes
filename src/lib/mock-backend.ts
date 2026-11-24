@@ -67,6 +67,7 @@ import type {
   WorkspaceManifest,
   WorkspaceView,
 } from "./types";
+import { chatContext } from "./evidenceContext";
 import { addWords as addLayoutWords, applyEdit as applyLayoutEdit, synthLayout } from "./mock-layout";
 import { historyView as textHistoryView, moveTarget as textMoveTarget, recordEdit as recordTextEdit, recordMove as recordTextMove, revertTargets as textRevertTargets, type MockTextHistoryRow, type MockTextState } from "./mock-text-history";
 import { defaultImportOptions, EVENTS, type ImportReport } from "./types";
@@ -1167,9 +1168,19 @@ function presetsText(): string {
   for (const d of discovered().filter((d) => d.health.kind === "ready")) {
     lines.push("", `[${d.id}]`, `model = ${d.weights[0]?.path ?? ""}`);
     if (d.mmproj) lines.push(`mmproj = ${d.mmproj.path}`);
-    lines.push(`load-on-startup = ${assess().active_model?.id === d.id}`, `ctx-size = ${s.models.profile === "speed" ? 8192 : s.models.profile === "balanced" ? 16384 : 32768}`, "parallel = 1", "reasoning = off", "reasoning-budget = 0");
+    lines.push(`load-on-startup = ${assess().active_model?.id === d.id}`, `ctx-size = ${d.role === "embedding" ? 2048 : mockChatContext(s)}`, "parallel = 1", "reasoning = off", "reasoning-budget = 0");
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * `ctx-size` of a chat model in the preset preview, and the context a loaded instance reports (1.0.6, as
+ * `engine::presets::chat_context`): what the profile gives, or what 근거 토큰 예산 needs when that is more —
+ * within the model's maximum (every mock model: 131,072).
+ */
+function mockChatContext(s: AppSettings): number {
+  const profile = s.models.profile === "speed" ? 8192 : s.models.profile === "balanced" ? 16384 : 32768;
+  return chatContext(profile, 131072, s.knowledge.context_tokens);
 }
 
 async function engineStart(): Promise<EngineStatus> {
@@ -1232,7 +1243,7 @@ async function loadModelJob(modelId: string, warmup: boolean): Promise<string> {
     }
     const d = discovered().find((x) => x.id === modelId);
     const bytes = Math.round((d?.total_bytes ?? 3.4e9) * 1.05) + 1.1e9;
-    setModel(modelId, { status: "loaded", progress: null, stage: null, memory_effective_bytes: bytes, loaded_at: new Date().toISOString(), warmed_up: warmup });
+    setModel(modelId, { status: "loaded", progress: null, stage: null, memory_effective_bytes: bytes, loaded_at: new Date().toISOString(), warmed_up: warmup, ctx: d?.role === "embedding" ? 2048 : mockChatContext(loadSettings()) });
     setEngine({ active_model: modelId });
     log(`warm-up done for ${modelId} in 420 ms`);
     finishJob(job.id, { ok: true, detail: `loaded (${bytes} bytes)` });

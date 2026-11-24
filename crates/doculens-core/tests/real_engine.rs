@@ -99,6 +99,7 @@ fn real_llama_server_load_chat_switch() {
         settings: &settings,
         active_model: None,
         debug: false,
+        evidence_tokens: doculens_core::knowledge::answer::DEFAULT_CONTEXT_TOKENS,
     };
     let build = presets::build_presets(&registry, &discovered, &ctx);
     assert!(

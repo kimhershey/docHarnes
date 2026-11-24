@@ -863,6 +863,70 @@ fn an_answer_prompt_the_server_refuses_is_retried_with_fewer_sources() {
     assert!(!a.no_evidence);
 }
 
+/// 1.0.6 (user decision 2026-11-24: no limits on the evidence settings — "오류나면 오류나는대로 토큰
+/// 줄이라고 하자"): a request the model's context still cannot hold after the evidence was cut down
+/// and retried fails with the reason code that tells the user to lower 근거 토큰 예산.
+#[test]
+fn what_still_does_not_fit_after_the_retries_says_to_lower_the_budget() {
+    use crate::engine::client::context_overflow;
+    let w = World::new();
+    add_long_regulation(&w);
+    // A slot no prompt fits (the system prompt alone is longer).
+    let tiny = LimitedChat::new(40, "- 핵심 [1]");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &tiny, model: None, cancelled: None, context_size: None };
+    let err = summarize(&deps, &summary_request(), &mut |_| true).unwrap_err();
+    assert!(err.to_string().starts_with("engine error: evidence_too_large: "), "{err}");
+    assert!(context_overflow(&err), "{err}");
+    assert!(tiny.sizes().len() > 2, "the groups were split and retried first: {:?}", tiny.sizes());
+
+    let tiny = LimitedChat::new(40, "출장비는 교통비·숙박비·일비로 구성됩니다[1].");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &tiny, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("출장비는 무엇으로 구성되나요?");
+    req.save = false;
+    let err = answer(&deps, &req, &mut |_| true).unwrap_err();
+    assert!(err.to_string().starts_with("engine error: evidence_too_large: "), "{err}");
+    assert!(tiny.sizes().len() >= 2, "retried with fewer sources first: {:?}", tiny.sizes());
+
+    // A text the user sent that does not fit is not the evidence budget's doing: the error as it came.
+    let mut text = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 함.");
+    text.retrieve = false;
+    text.save = false;
+    let err = answer(&deps, &text, &mut |_| true).unwrap_err();
+    assert!(context_overflow(&err) && !err.to_string().contains("evidence_too_large"), "{err}");
+}
+
+/// 1.0.6: 근거 청크 수 goes up to 200 (it was 32, and 20 on the settings screen). A larger count also
+/// lets more passages of one document in — four of a document, as at the default of eight, made every
+/// larger value useless for a question about a single long document.
+#[test]
+fn a_larger_passage_count_lets_more_of_one_document_in() {
+    let w = World::new();
+    add_long_regulation(&w);
+    let chunks = w.db.with(|c| repo::list_chunks(c, "big")).unwrap().len();
+    assert!(chunks >= 8, "the long regulation has many passages: {chunks}");
+    let ask = |top_k: u32| -> usize {
+        let chat = RecordingChat::new("출장비는 실비로 정산한다 [1].", Some("stop"));
+        let deps =
+            AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+        let mut req = AnswerRequest::question("출장비 숙박비 한도와 정산 기준은?");
+        req.save = false;
+        req.scope.documents = vec!["big".into()];
+        req.top_k = top_k;
+        req.context_tokens = 262_144;
+        answer(&deps, &req, &mut |_| true).unwrap().sources.len()
+    };
+    // The default: four passages of a document, as before.
+    assert_eq!(ask(8), 4);
+    let sixteen = ask(16);
+    assert!(sixteen > 4 && sixteen <= 8, "{sixteen}");
+    // The top of the range (and anything above it, which is the top of the range).
+    let most = ask(200);
+    assert!(most > sixteen && most <= chunks, "{most} of {chunks}");
+    assert_eq!(ask(5_000), most);
+}
+
 #[test]
 fn a_text_only_request_skips_retrieval_and_cites_nothing() {
     let w = World::new();
@@ -1894,10 +1958,18 @@ fn the_length_of_a_reply_follows_the_evidence_budget() {
     let (reply, system, _) = ask(6_000, Some(16_384));
     assert_eq!(reply, 1_200);
     assert!(system.contains("한국어로 간결하게 답합니다."), "{system}");
-    // The largest budget: four times as long, asked for in detail.
+    // A budget of 24,000: four times as long, asked for in detail.
     let (reply, system, _) = ask(24_000, Some(32_768));
     assert_eq!(reply, 4_800);
     assert!(system.contains("자세히 설명하고") && !system.contains("간결하게"), "{system}");
+    // 1.0.6: no ceiling at four times the default — a fifth of whatever the budget is, in the context
+    // the engine loads the model with for it (`context_needed`).
+    let needed = super::answer::context_needed(60_000);
+    assert_eq!(needed, Some(75_776));
+    assert_eq!(ask(60_000, needed).0, 12_000);
+    assert_eq!(ask(60_000, None).0, 12_000);
+    // (a budget above the range is the top of the range: 262,144 / 5)
+    assert_eq!(ask(1_000_000, None).0, 52_428);
     // … never more than a third of the model's context, so that the evidence still has its room.
     let (reply, _, sources) = ask(24_000, Some(8_192));
     assert_eq!(reply, 2_730);
@@ -1947,6 +2019,15 @@ fn the_length_of_a_reply_follows_the_evidence_budget() {
     let (reply, prompt, _) = summary(24_000, SummaryMode::KeyPoints, Some(8_192));
     assert_eq!(reply, 2_730);
     assert!(prompt.contains("9개 이내의 개조식"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
+    // 1.0.6: a quarter of a larger budget, and more items / sentences asked for with it (up to 60 / 120).
+    let (reply, prompt, _) = summary(60_000, SummaryMode::KeyPoints, needed);
+    assert_eq!(reply, 15_000);
+    assert!(prompt.contains("50개 이내의 개조식"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
+    let (reply, prompt, _) = summary(200_000, SummaryMode::OnePage, Some(131_072));
+    assert_eq!(reply, 43_690);
+    assert!(prompt.contains("여러 쪽 분량(120문장 내외)"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
+    let (_, prompt, _) = summary(200_000, SummaryMode::KeyPoints, Some(131_072));
+    assert!(prompt.contains("60개 이내의 개조식"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
 }
 
 /// 1.0.1: a merge of partial summaries the server refuses is done in smaller steps. The refused group

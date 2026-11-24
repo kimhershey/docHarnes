@@ -132,7 +132,10 @@ pub struct AppState {
     pub jobs: JobBook,
     pub app: OnceLock<AppHandle>,
     /// Serialises `presets.ini` regeneration + router reload.
-    pub presets_lock: Mutex<()>,
+    /// Serialises the writers of `presets.ini`. It holds what the file written last says about the
+    /// contexts 근거 토큰 예산 raised above the profile's (model id → `ctx-size`), for the report of a
+    /// model load that fails (`engine_bridge::load_error`).
+    pub presets_lock: Mutex<std::collections::BTreeMap<String, u64>>,
     /// PDFium library path once resolved, or why the last attempt failed
     /// (failures are retried on the next use).
     pub pdfium: Mutex<Option<std::result::Result<PathBuf, String>>>,
@@ -194,7 +197,7 @@ impl AppState {
             watcher: Mutex::new(None),
             jobs: JobBook::default(),
             app: OnceLock::new(),
-            presets_lock: Mutex::new(()),
+            presets_lock: Mutex::new(Default::default()),
             pdfium: Mutex::new(None),
             workspace_generation: AtomicU64::new(0),
             inbox_dirty: AtomicBool::new(false),

@@ -25,8 +25,10 @@ import { invalidateMaintenance, useAppInfo, useDocuments, useMaintenanceStatus, 
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type PlanMode, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
 import { describeError } from "@/lib/errors";
+import { integerRange } from "@/lib/settingsCatalog";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/ipc";
+import { useEngineStore } from "@/stores/engine";
 import { useJob } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -637,6 +639,16 @@ function NumberField({ id, value, min, max, step, precision = 0, onCommit, testI
   );
 }
 
+/**
+ * The ranges of the three evidence numbers, from the catalog the core generates (`settingsCatalog.json`): 1.0.6
+ * took the limits off 근거 토큰 예산 (up to the largest context a model takes) and 근거 청크 수 (1–200).
+ */
+const KNOWLEDGE_RANGES = {
+  context_tokens: integerRange("knowledge.context_tokens"),
+  top_k: integerRange("knowledge.top_k"),
+  chunk_target_tokens: integerRange("knowledge.chunk_target_tokens"),
+} as const;
+
 function KnowledgeTab() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings)!;
@@ -646,13 +658,17 @@ function KnowledgeTab() {
   const k = settings.knowledge;
   const embeddings = (registry?.models ?? []).filter((m) => m.role === "embedding");
   const DEFAULT = "__default__";
-  const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, min: number, max: number, step: number, hint?: string) => (
+  // The context the loaded chat model runs with: 근거 토큰 예산 above the default asks the engine for a larger one,
+  // which takes effect when the model is loaded again after an engine restart.
+  const engine = useEngineStore((s) => s.status);
+  const loadedModel = engine?.models.find((m) => m.id === engine.active_model && (m.status === "loaded" || m.status === "sleeping") && m.ctx != null);
+  const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, step: number, hint?: React.ReactNode) => (
     <Row label={label} hint={hint} htmlFor={`kb-${key}`}>
       <NumberField
         id={`kb-${key}`}
         value={k[key]}
-        min={min}
-        max={max}
+        min={KNOWLEDGE_RANGES[key].min}
+        max={KNOWLEDGE_RANGES[key].max}
         step={step}
         onCommit={(v) => void update((s) => void (s.knowledge[key] = v))}
         testId={`kb-${key}`}
@@ -699,9 +715,21 @@ function KnowledgeTab() {
             <span className="w-10 text-xs tabular-nums">{k.min_vector_similarity.toFixed(2)}</span>
           </div>
         </Row>
-        {numberRow("context_tokens", t("settings.knowledge.context_tokens"), 1000, 24000, 500, t("settings.knowledge.context_tokens_hint"))}
-        {numberRow("top_k", t("settings.knowledge.top_k"), 1, 20, 1)}
-        {numberRow("chunk_target_tokens", t("settings.knowledge.chunk_target"), 120, 2000, 20)}
+        {numberRow(
+          "context_tokens",
+          t("settings.knowledge.context_tokens"),
+          500,
+          <>
+            {t("settings.knowledge.context_tokens_hint")}
+            {loadedModel && (
+              <span className="mt-1 block text-fg-subtle" data-testid="kb-context-loaded">
+                {t("settings.knowledge.context_loaded", { model: loadedModel.id, tokens: (loadedModel.ctx ?? 0).toLocaleString("en-US") })}
+              </span>
+            )}
+          </>,
+        )}
+        {numberRow("top_k", t("settings.knowledge.top_k"), 1)}
+        {numberRow("chunk_target_tokens", t("settings.knowledge.chunk_target"), 20, t("settings.knowledge.chunk_target_hint"))}
       </CardContent>
     </Card>
   );
